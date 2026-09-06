@@ -123,6 +123,8 @@ Each drain reads MASTER column D once and compares its values with pending rows 
 
 A Sheets read/write failure is classified `SHEETS_APPEND`; affected rows remain pending and the marker does not advance. The single column-D read returns both the KEY_ID set and the latest non-empty KEY_ID in Sheet row order. If Sheets succeeds but SQLite status or marker persistence fails, the failure is classified `LOCAL_FINALIZATION`. A still-pending row is safe on the next attempt because column D is reread before any append. When that row is found remotely, recovery marks it exported and saves the authoritative latest remote KEY_ID rather than guessing from SQLite process-date order. If status succeeds but marker persistence fails, the row remains exported and is not selected again; the existing startup Sheet-marker reconciliation can repair the marker later. The marker remains an optimization and never suppresses inspection of SQLite pending state.
 
+After each successful append, recovery updates the in-memory latest-remote marker to the last KEY_ID in that appended batch. Therefore a later already-remote batch in the same drain cannot overwrite the new marker with the stale pre-append Sheet snapshot; the normal append → local exported status → appended-batch marker contract remains unchanged.
+
 ### Ordering, batching, concurrency, and backoff
 
 `SQLiteService.getPendingExports()` continues to order by `process_date ASC`; recovery preserves that order and divides it into the configured monitoring batch size. One column-D read serves the drain, and each missing subset is written as one unambiguous batch. Already-present members of mixed batches are excluded from the write.

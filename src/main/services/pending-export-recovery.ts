@@ -123,6 +123,10 @@ export class PendingExportRecovery {
         for (const transaction of missing) {
           remoteKeyIds.add(this.keyId(transaction.transactionFingerprint));
         }
+        // The initial Sheet snapshot is stale after this successful append.
+        // Keep its row-order marker state current so a later already-remote
+        // batch cannot regress the marker to the pre-append latest KEY_ID.
+        latestRemoteKeyId = this.keyId(missing[missing.length - 1].transactionFingerprint);
       } catch {
         result.failureClass = 'SHEETS_APPEND';
         this.scheduleBackoff();

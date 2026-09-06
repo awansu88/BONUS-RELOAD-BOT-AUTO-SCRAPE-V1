@@ -134,5 +134,19 @@ function fixture(initial, remote = []) {
   assert.equal(r.skipped, 'BACKOFF'); assert.equal(r.remaining, 1);
   assert.equal(engineK.getExportStats().retryQueueCount, 1); assert.equal(f.calls.append, appendCallsAfterFailure);
 
-  console.log('PASS: Phase 1 recovery matrix A-K (reconciliation, failures, guard, batching, durable counts).');
+  // L: a later already-remote batch cannot restore a stale pre-append marker.
+  f = fixture([tx('MMMMMMMM', '2026-01-01'), tx('RRRRRRRR', '2026-01-02')], ['RRRRRRRR']);
+  r = await new PendingExportRecovery(f.sqlite, f.sheets).recover({ force: true, batchSize: 1 });
+  assert.equal(r.appended, 1); assert.equal(r.alreadyRemote, 1); assert.equal(r.remaining, 0);
+  assert.equal(f.calls.append, 1); assert.equal(f.store.marker, 'MMMMMMMM');
+  assert.ok(f.store.rows.every(row => row.exportStatus === 'exported'));
+
+  // Reverse order: initial snapshot repair may occur first, then append wins.
+  f = fixture([tx('RRRRRRRR', '2026-01-01'), tx('MMMMMMMM', '2026-01-02')], ['RRRRRRRR']);
+  r = await new PendingExportRecovery(f.sqlite, f.sheets).recover({ force: true, batchSize: 1 });
+  assert.equal(r.appended, 1); assert.equal(r.alreadyRemote, 1); assert.equal(r.remaining, 0);
+  assert.equal(f.calls.append, 1); assert.equal(f.store.marker, 'MMMMMMMM');
+  assert.ok(f.store.rows.every(row => row.exportStatus === 'exported'));
+
+  console.log('PASS: Phase 1 recovery matrix A-L (reconciliation, failures, guard, batching, durable counts, marker ordering).');
 })().catch(error => { console.error(error); process.exitCode = 1; });
