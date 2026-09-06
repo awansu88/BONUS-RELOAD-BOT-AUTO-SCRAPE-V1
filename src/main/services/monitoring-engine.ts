@@ -439,6 +439,7 @@ export class MonitoringEngine {
   }
   
   private async processFilter(filter: FilterProfile): Promise<void> {
+    const filterStartedAt = Date.now();
     const page = this.playwrightService.getPage();
     if (!page) throw new Error('Browser page not available');
     
@@ -499,6 +500,9 @@ export class MonitoringEngine {
     // can distinguish End Of Pagination from a real navigation failure and
     // see exactly how many rows survived to the export buffer.
     const bufferedThisFilter = this.cycleCounters.buffered - bufferedBefore;
+    const parsedThisFilter = result.perPage.reduce((sum, page) => sum + page.rowsParsed, 0);
+    const rejectedThisFilter = result.perPage.reduce((sum, page) => sum + page.rowsRejected, 0);
+    const duplicateThisFilter = result.perPage.reduce((sum, page) => sum + page.duplicate, 0);
     getLogger().info(
       '\n========== PAGINATION SUMMARY ==========\n' +
       `  Filter Profile        : ${filter.name}\n` +
@@ -508,6 +512,9 @@ export class MonitoringEngine {
       `  Termination Reason    : ${result.terminationReason}\n` +
       `  Transactions Buffered : ${result.transactions.length}\n` +
       `  Transactions Exported : ${bufferedThisFilter} (queued — actual Sheets append reported in pipeline audit)\n` +
+      `  Rows Parsed / Rejected : ${parsedThisFilter} / ${rejectedThisFilter}\n` +
+      `  Rows New / Duplicate   : ${parsedThisFilter - duplicateThisFilter} / ${duplicateThisFilter}\n` +
+      `  Total Filter Time      : ${Date.now() - filterStartedAt}ms\n` +
       '========================================'
     );
     
@@ -657,11 +664,13 @@ export class MonitoringEngine {
     
     try {
       logger.info(`[STAGE] Google Sheets Batch Append: starting for ${count} row(s)…`);
+      const sheetsStartedAt = Date.now();
       const exportResult = await this.googleSheetsService.appendTransactions(batch);
       this.cycleCounters.sheetsAppended += count;
       logger.info(
         `[STAGE] Google Sheets Batch Append: SUCCESS ` +
-        `(${count} row(s) → ${exportResult.destinationRange}, rows ${exportResult.startRow}..${exportResult.endRow})`
+        `(${count} row(s) → ${exportResult.destinationRange}, rows ${exportResult.startRow}..${exportResult.endRow}, ` +
+        `latency=${Date.now() - sheetsStartedAt}ms)`
       );
       
       this.setState('UPDATING_CACHE');
