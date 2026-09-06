@@ -700,9 +700,9 @@ export class MonitoringEngine {
       force: options.force,
       batchSize: this.config?.monitoring.batchSize || 1000,
     });
-    this.exportStats.retryQueueCount = result.skipped === 'RUNNING'
-      ? this.exportStats.retryQueueCount
-      : result.remaining;
+    // A null count is intentionally non-authoritative (only the concurrent
+    // RUNNING skip). Every other result carries a fresh SQLite pending count.
+    if (result.remaining !== null) this.exportStats.retryQueueCount = result.remaining;
     if (result.reconciled > 0) this.resumeMarker = await this.sqliteService.getResumeMarker();
     return result;
   }

@@ -26,17 +26,24 @@ function fixture(initial, remote = []) {
     },
     saveResumeMarker: async key => { calls.marker++; store.marker = key; },
   };
-  const remoteIds = new Set(remote);
+  const remoteRows = [...remote];
+  const remoteIds = new Set(remoteRows);
   const sheets = {
     isConnected: () => true,
-    getExportedKeyIds: async () => new Set(remoteIds),
+    getExportedKeyIdState: async () => ({
+      keyIds: new Set(remoteIds),
+      latestKeyId: remoteRows.length ? remoteRows[remoteRows.length - 1] : null,
+    }),
     appendTransactions: async rows => {
       calls.append++;
-      rows.forEach(t => remoteIds.add(t.transactionFingerprint.slice(0, 8).toUpperCase()));
+      rows.forEach(t => {
+        const keyId = t.transactionFingerprint.slice(0, 8).toUpperCase();
+        remoteIds.add(keyId); remoteRows.push(keyId);
+      });
       return {};
     },
   };
-  return { store, calls, sqlite, sheets, remoteIds };
+  return { store, calls, sqlite, sheets, remoteIds, remoteRows };
 }
 
 (async () => {
@@ -63,7 +70,8 @@ function fixture(initial, remote = []) {
   f.sqlite.updateExportStatus = async (...args) => { if (failMark) throw new Error('fixture'); return markD(...args); };
   const recoveryD = new PendingExportRecovery(f.sqlite, f.sheets);
   r = await recoveryD.recover({ force: true }); assert.equal(r.failureClass, 'LOCAL_FINALIZATION'); assert.equal(f.calls.append, 1);
-  failMark = false; r = await recoveryD.recover({ force: true }); assert.equal(f.calls.append, 1); assert.equal(r.remaining, 0);
+  failMark = false; r = await recoveryD.recover({ force: true });
+  assert.equal(f.calls.append, 1); assert.equal(r.remaining, 0); assert.equal(f.store.marker, 'DDDDDDDD');
 
   // E: marker failure occurs after exported status and therefore cannot re-append.
   f = fixture([tx('EEEEEEEE')]); let failMarker = true;
@@ -71,11 +79,14 @@ function fixture(initial, remote = []) {
   f.sqlite.saveResumeMarker = async key => { if (failMarker) throw new Error('fixture'); return markerE(key); };
   const recoveryE = new PendingExportRecovery(f.sqlite, f.sheets);
   r = await recoveryE.recover({ force: true }); assert.equal(r.failureClass, 'LOCAL_FINALIZATION'); assert.equal(f.store.rows[0].exportStatus, 'exported');
-  failMarker = false; await recoveryE.recover({ force: true }); assert.equal(f.calls.append, 1);
+  failMarker = false; await recoveryE.recover({ force: true });
+  assert.equal(f.calls.append, 1); assert.equal(f.store.rows[0].exportStatus, 'exported');
 
   // F: concurrent trigger is rejected by the single-drain guard.
   f = fixture([tx('FFFFFFFF')]); let release;
-  f.sheets.getExportedKeyIds = () => new Promise(resolve => { release = () => resolve(new Set()); });
+  f.sheets.getExportedKeyIdState = () => new Promise(resolve => {
+    release = () => resolve({ keyIds: new Set(), latestKeyId: null });
+  });
   const recoveryF = new PendingExportRecovery(f.sqlite, f.sheets);
   const first = recoveryF.recover({ force: true });
   await Promise.resolve();
@@ -103,5 +114,25 @@ function fixture(initial, remote = []) {
   r = await new PendingExportRecovery(f.sqlite, f.sheets).recover({ force: true, batchSize: 100 });
   assert.equal(r.alreadyRemote, 1); assert.equal(r.appended, 2); assert.equal(f.calls.append, 1); assert.equal(r.remaining, 0);
 
-  console.log('PASS: Phase 1 recovery matrix A-I (durability, reconciliation, failures, guard, restart, batching).');
+  // J: disconnected Sheets reports the authoritative durable pending depth.
+  f = fixture([tx('J1J1J1J1'), tx('J2J2J2J2')]);
+  f.sheets.isConnected = () => false;
+  const engineJ = new MonitoringEngine({}, {}, {}, {}, f.sqlite, f.sheets, {});
+  engineJ.isRunning = true;
+  r = await engineJ.recoverPendingExports({ force: true });
+  assert.equal(r.skipped, 'SHEETS_UNAVAILABLE'); assert.equal(r.remaining, 2);
+  assert.equal(engineJ.getExportStats().retryQueueCount, 2); assert.equal(f.calls.append, 0);
+
+  // K: failure backoff performs no append and retains authoritative depth.
+  f = fixture([tx('K1K1K1K1')]);
+  f.sheets.appendTransactions = async () => { f.calls.append++; throw new Error('fixture'); };
+  const engineK = new MonitoringEngine({}, {}, {}, {}, f.sqlite, f.sheets, {});
+  engineK.isRunning = true;
+  r = await engineK.recoverPendingExports({ force: true }); assert.equal(r.failureClass, 'SHEETS_APPEND');
+  const appendCallsAfterFailure = f.calls.append;
+  r = await engineK.recoverPendingExports();
+  assert.equal(r.skipped, 'BACKOFF'); assert.equal(r.remaining, 1);
+  assert.equal(engineK.getExportStats().retryQueueCount, 1); assert.equal(f.calls.append, appendCallsAfterFailure);
+
+  console.log('PASS: Phase 1 recovery matrix A-K (reconciliation, failures, guard, batching, durable counts).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

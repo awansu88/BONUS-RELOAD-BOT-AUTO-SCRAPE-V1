@@ -11,7 +11,7 @@ export interface PendingRecoveryResult {
   alreadyRemote: number;
   appended: number;
   reconciled: number;
-  remaining: number;
+  remaining: number | null;
   skipped: 'RUNNING' | 'SHEETS_UNAVAILABLE' | 'BACKOFF' | 'STOPPED' | null;
   failureClass: RecoveryFailureClass | null;
 }
@@ -39,7 +39,7 @@ export class PendingExportRecovery {
       return Promise.resolve(this.emptyResult('RUNNING'));
     }
     if (!options.force && this.now() < this.nextAttemptAt) {
-      return Promise.resolve(this.emptyResult('BACKOFF'));
+      return this.pendingCountResult('BACKOFF');
     }
 
     const operation = this.drain(Math.max(1, options.batchSize || 1000));
@@ -53,13 +53,13 @@ export class PendingExportRecovery {
   private async drain(batchSize: number): Promise<PendingRecoveryResult> {
     const startedAt = this.now();
     const logger = getLogger();
-    if (this.shouldStop()) return this.emptyResult('STOPPED');
+    const pending = await this.sqliteService.getPendingExports();
+    if (this.shouldStop()) return this.resultWithPending('STOPPED', pending.length);
     if (!this.googleSheetsService.isConnected()) {
       logger.info('[PENDING RECOVERY] deferred: Google Sheets unavailable');
-      return this.emptyResult('SHEETS_UNAVAILABLE');
+      return this.resultWithPending('SHEETS_UNAVAILABLE', pending.length);
     }
 
-    const pending = await this.sqliteService.getPendingExports();
     const result: PendingRecoveryResult = {
       pendingFound: pending.length, alreadyRemote: 0, appended: 0,
       reconciled: 0, remaining: pending.length, skipped: null, failureClass: null,
@@ -71,8 +71,11 @@ export class PendingExportRecovery {
 
     logger.info(`[PENDING RECOVERY] pending rows found=${pending.length}, batchSize=${batchSize}`);
     let remoteKeyIds: Set<string>;
+    let latestRemoteKeyId: string | null;
     try {
-      remoteKeyIds = await this.googleSheetsService.getExportedKeyIds();
+      const remoteState = await this.googleSheetsService.getExportedKeyIdState();
+      remoteKeyIds = remoteState.keyIds;
+      latestRemoteKeyId = remoteState.latestKeyId;
     } catch {
       result.failureClass = 'SHEETS_APPEND';
       this.scheduleBackoff();
@@ -96,6 +99,11 @@ export class PendingExportRecovery {
             alreadyRemote.map(t => t.transactionFingerprint), 'exported'
           );
           result.reconciled += alreadyRemote.length;
+          // The last non-empty Sheet row is authoritative. Never infer a
+          // latest marker from process_date ordering of pending SQLite rows.
+          if (latestRemoteKeyId) {
+            await this.sqliteService.saveResumeMarker(latestRemoteKeyId);
+          }
         }
       } catch {
         result.failureClass = 'LOCAL_FINALIZATION';
@@ -163,10 +171,25 @@ export class PendingExportRecovery {
     this.nextAttemptAt = 0;
   }
 
+  private async pendingCountResult(skipped: PendingRecoveryResult['skipped']): Promise<PendingRecoveryResult> {
+    const pending = await this.sqliteService.getPendingExports();
+    return this.resultWithPending(skipped, pending.length);
+  }
+
+  private resultWithPending(
+    skipped: PendingRecoveryResult['skipped'],
+    remaining: number,
+  ): PendingRecoveryResult {
+    return {
+      pendingFound: 0, alreadyRemote: 0, appended: 0, reconciled: 0,
+      remaining, skipped, failureClass: null,
+    };
+  }
+
   private emptyResult(skipped: PendingRecoveryResult['skipped']): PendingRecoveryResult {
     return {
       pendingFound: 0, alreadyRemote: 0, appended: 0, reconciled: 0,
-      remaining: 0, skipped, failureClass: null,
+      remaining: null, skipped, failureClass: null,
     };
   }
 }

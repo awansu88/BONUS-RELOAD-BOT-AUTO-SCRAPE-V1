@@ -121,7 +121,7 @@ Stop is cooperative: the owner checks the monitoring stop signal before remote r
 
 Each drain reads MASTER column D once and compares its values with pending rows using the existing first-eight-uppercase-SHA-1 KEY_ID contract. This short identity has a theoretical collision risk; changing it would break the frozen production contract and is intentionally out of Phase 1. Rows already remote are marked exported without another append. Missing rows are written using the existing `GoogleSheetsService.appendTransactions()` B:E / `USER_ENTERED` operation, then marked exported, then the existing resume marker is saved.
 
-A Sheets read/write failure is classified `SHEETS_APPEND`; affected rows remain pending and the marker does not advance. If Sheets succeeds but SQLite status or marker persistence fails, the failure is classified `LOCAL_FINALIZATION`. A still-pending row is safe on the next attempt because column D is reread before any append. If status succeeds but marker persistence fails, the row is already exported and is not selected again; the existing startup Sheet-marker reconciliation can repair the marker later. The marker remains an optimization and never suppresses inspection of SQLite pending state.
+A Sheets read/write failure is classified `SHEETS_APPEND`; affected rows remain pending and the marker does not advance. The single column-D read returns both the KEY_ID set and the latest non-empty KEY_ID in Sheet row order. If Sheets succeeds but SQLite status or marker persistence fails, the failure is classified `LOCAL_FINALIZATION`. A still-pending row is safe on the next attempt because column D is reread before any append. When that row is found remotely, recovery marks it exported and saves the authoritative latest remote KEY_ID rather than guessing from SQLite process-date order. If status succeeds but marker persistence fails, the row remains exported and is not selected again; the existing startup Sheet-marker reconciliation can repair the marker later. The marker remains an optimization and never suppresses inspection of SQLite pending state.
 
 ### Ordering, batching, concurrency, and backoff
 
@@ -132,6 +132,8 @@ An in-process in-flight guard permits only one drain across startup, cycle, and 
 ### Observability and limitations
 
 Concise aggregate logs report pending count, batch size, already-remote/appended/reconciled/remaining counts, duration, running/unavailable deferrals, and the `LOCAL_PERSISTENCE`, `SHEETS_APPEND`, or `LOCAL_FINALIZATION` category. Recovery adds no customer identifiers or authentication material to logs.
+
+Skipped unavailable, stopped, and backoff results refresh their remaining count from SQLite. A concurrent `RUNNING` skip is explicitly non-authoritative and preserves the dashboard's last authoritative count, so `retryQueueCount` cannot be reset to zero merely because work was deferred. The Electron 28 `test:phase1:sqlite` gate uses the production SQLite service and native ABI to persist, close, reopen, recover, and reopen a sanitized V1 database without live Sheets credentials.
 
 Remaining limitations are the frozen eight-character KEY_ID collision risk, cooperative rather than cancellable in-flight API shutdown, and marker repair after a status-success/marker-failure boundary occurring through the existing startup marker reconciliation. This is a single-process guard, not a distributed lock.
 

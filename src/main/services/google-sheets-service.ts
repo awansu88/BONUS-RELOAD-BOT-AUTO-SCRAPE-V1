@@ -21,6 +21,11 @@ export interface ExportResult {
   worksheetName: string;
 }
 
+export interface ExportedKeyIdState {
+  keyIds: Set<string>;
+  latestKeyId: string | null;
+}
+
 export class GoogleSheetsService {
   private sheetsClient: any = null;
   private currentConfig: GoogleSheetsConfig | null = null;
@@ -263,7 +268,7 @@ export class GoogleSheetsService {
    * Unlike the resume-marker convenience read, failures are surfaced so a
    * recovery drain cannot mistake an unavailable read for an empty Sheet.
    */
-  async getExportedKeyIds(): Promise<Set<string>> {
+  async getExportedKeyIdState(): Promise<ExportedKeyIdState> {
     if (!this.sheetsClient || !this.currentConfig) {
       throw new Error('Google Sheets client not initialized');
     }
@@ -273,13 +278,15 @@ export class GoogleSheetsService {
       valueRenderOption: 'UNFORMATTED_VALUE',
     });
     const ids = new Set<string>();
+    let latestKeyId: string | null = null;
     for (const row of response.data.values || []) {
       const value = row?.[0];
       if (value !== undefined && value !== null && String(value).trim() !== '') {
-        ids.add(String(value).trim().toUpperCase());
+        latestKeyId = String(value).trim().toUpperCase();
+        ids.add(latestKeyId);
       }
     }
-    return ids;
+    return { keyIds: ids, latestKeyId };
   }
   
   /**
