@@ -21,16 +21,18 @@ const result = (reason = 'END_OF_PAGINATION', navigationFailure = false) => ({
 
 async function adapterFixture(overrides = {}) {
   const calls = { apply: [], stop: [], duplicate: [], scan: [] };
+  const events = [];
   const expected = overrides.result || result();
   const scanner = {
-    setShouldStop(fn) { calls.stop.push(fn); },
-    setDuplicateCheck(fn) { calls.duplicate.push(fn); },
-    async scanPages(f, max) { calls.scan.push([f, max]); return expected; },
+    setShouldStop(fn) { events.push('setShouldStop'); calls.stop.push(fn); },
+    setDuplicateCheck(fn) { events.push('setDuplicateCheck'); calls.duplicate.push(fn); },
+    async scanPages(f, max) { events.push('scanPages'); calls.scan.push([f, max]); return expected; },
   };
   const page = {};
   const service = {
-    getPage: () => overrides.page === null ? null : page,
+    getPage: () => { events.push('getPage'); return overrides.page === null ? null : page; },
     async applyFilter(...args) {
+      events.push('applyFilter');
       calls.apply.push(args);
       if (overrides.applyError) throw overrides.applyError;
     },
@@ -38,7 +40,7 @@ async function adapterFixture(overrides = {}) {
   const adapter = new LegacyBrowserSourceAdapter(service, () => scanner);
   const duplicateCheck = () => false;
   const shouldStop = () => false;
-  return { adapter, calls, expected, duplicateCheck, shouldStop, request: {
+  return { adapter, calls, events, expected, duplicateCheck, shouldStop, request: {
     filter, manualDateMode: overrides.manualDateMode ?? true, maxPages: 7,
     initialSyncMode: overrides.initialSyncMode ?? false, duplicateCheck, shouldStop,
   }};
@@ -109,10 +111,45 @@ async function adapterFixture(overrides = {}) {
   assert.strictEqual(sourceRequest.maxPages, 7);
   assert.strictEqual(validations, 1);
 
+  // L: source preparation completes before scan-start; failures never fire it.
+  f = await adapterFixture();
+  f.request.onScanStart = () => f.events.push('onScanStart');
+  await f.adapter.scan(f.request);
+  assert.deepStrictEqual(f.events, [
+    'getPage', 'applyFilter', 'onScanStart', 'setShouldStop', 'setDuplicateCheck', 'scanPages',
+  ]);
+
+  f = await adapterFixture({ page: null });
+  f.request.onScanStart = () => f.events.push('onScanStart');
+  await assert.rejects(() => f.adapter.scan(f.request), /Browser page not available/);
+  assert.deepStrictEqual(f.events, ['getPage']);
+
+  f = await adapterFixture({ applyError: unavailable });
+  f.request.onScanStart = () => f.events.push('onScanStart');
+  await assert.rejects(() => f.adapter.scan(f.request), error => error === unavailable);
+  assert.deepStrictEqual(f.events, ['getPage', 'applyFilter']);
+
+  // M: a fatal source result is handed through the pipeline before cycle-fatal rejection.
+  const fatalEvents = [];
+  const fatalSource = { async scan() { return result('NAVIGATION_FAILURE', true); } };
+  const fatalEngine = new MonitoringEngine(
+    {}, {}, { validate(value) { fatalEvents.push('validated'); assert.strictEqual(value, raw); return { valid: true, errors: [] }; } },
+    { generate: () => 'FATAL-FINGERPRINT' },
+    { getPendingExports: async () => [], isReady: () => true },
+    { isConnected: () => false }, {}, fatalSource,
+  );
+  fatalEngine.isRunning = true;
+  fatalEngine.config = { features: { manualDateMode: true, initialSyncMode: false }, monitoring: { maxPageScan: 7, batchSize: 1000 } };
+  let fatalError;
+  try { await fatalEngine.processFilter(filter); }
+  catch (error) { fatalEvents.push('thrown'); fatalError = error; }
+  assert.deepStrictEqual(fatalEvents, ['validated', 'thrown']);
+  assert.strictEqual(fatalError.isCycleFatal, true);
+  assert.strictEqual(fatalEngine.buffer.length, 1, 'collected fatal-result row must reach downstream buffer');
+
   // Narrow structural guard complements the executable injection test.
   const engineSource = fs.readFileSync(path.join(ROOT, 'src/main/services/monitoring-engine.ts'), 'utf8');
   assert.ok(!engineSource.includes('new PageScanner('), 'MonitoringEngine must not construct PageScanner');
 
-  console.log('PASS: Phase 2 source adapter cases A-K and MonitoringEngine structural boundary.');
+  console.log('PASS: Phase 2 source adapter cases A-M and MonitoringEngine structural boundary.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
-

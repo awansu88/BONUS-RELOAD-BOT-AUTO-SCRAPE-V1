@@ -35,10 +35,11 @@ export interface SourceScanRequest {
   initialSyncMode: boolean;
   shouldStop: () => boolean;
   duplicateCheck: (raw: RawTransaction) => boolean;
+  /** Called after source preparation succeeds, immediately before acquisition starts. */
+  onScanStart?: () => void;
 }
 
 /** Transport-neutral boundary for acquiring raw transaction rows. */
 export interface SourceAdapter {
   scan(request: SourceScanRequest): Promise<SourceScanResult>;
 }
-

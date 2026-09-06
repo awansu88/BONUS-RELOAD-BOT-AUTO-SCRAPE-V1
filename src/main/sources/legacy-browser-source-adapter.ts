@@ -32,10 +32,10 @@ export class LegacyBrowserSourceAdapter implements SourceAdapter {
       { manualDateMode: request.manualDateMode },
     );
 
+    request.onScanStart?.();
     const scanner = this.scannerFactory(page);
     scanner.setShouldStop(request.shouldStop);
     scanner.setDuplicateCheck(request.initialSyncMode ? null : request.duplicateCheck);
     return scanner.scanPages(request.filter, request.maxPages);
   }
 }
-

@@ -166,4 +166,6 @@ MonitoringEngine
 
 `MonitoringEngine` retains validation, fingerprint generation, the in-cycle and SQLite-backed duplicate predicate, buffering, SQLite persistence, pending recovery, Sheets export, pagination summaries, and fatal-cycle decisions. In particular, collected rows are processed before fatal navigation metadata is acted upon, and unavailable-profile errors continue to propagate to the existing per-profile skip logic.
 
+The transport-neutral scan-start hook preserves the Legacy lifecycle boundary: it fires only after source preparation and filter application succeed, immediately before scanner configuration and acquisition. Page-unavailable and filter-application failures never transition the engine to `SCANNING_PAGE`.
+
 Phase 2 implements no FAST or HTTP source, source selector, fallback, authentication/session extraction, concurrency, request retry, endpoint, query resolver, schema change, Sheet change, or UI control. It changes no operator behavior and makes no performance improvement claim: production still follows the same browser and `PageScanner` path, so expected performance is approximately unchanged.

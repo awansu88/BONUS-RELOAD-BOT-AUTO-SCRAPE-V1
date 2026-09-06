@@ -462,7 +462,6 @@ export class MonitoringEngine {
     // Default: true (reliability > automation, per production directive).
     const manualDateMode = this.config?.features.manualDateMode !== false;
     
-    this.setState('SCANNING_PAGE');
     // The source receives the cooperative cancellation signal and the
     // duplicate detector — the ONLY duplicate scan-termination signal.
     // Uses fingerprint + SQLite + the current in-cycle cache. When a full
@@ -491,6 +490,9 @@ export class MonitoringEngine {
       initialSyncMode,
       shouldStop: () => !this.isRunning,
       duplicateCheck,
+      // Preserve Legacy lifecycle ordering: source preparation (including
+      // filter application) must succeed before the scan state is exposed.
+      onScanStart: () => this.setState('SCANNING_PAGE'),
     });
     
     // PATCH 12 — Process every collected transaction FIRST, regardless of
