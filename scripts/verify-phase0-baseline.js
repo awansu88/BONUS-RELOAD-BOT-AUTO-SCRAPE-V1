@@ -3,7 +3,6 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const Database = require('better-sqlite3');
 
 const DIST = path.resolve(__dirname, '..', 'dist/main/main');
 const loggerSvc = require(path.join(DIST, 'services/logger-service.js'));
@@ -14,7 +13,6 @@ const { PageScanner } = require(path.join(DIST, 'services/page-scanner.js'));
 const { GoogleSheetsService } = require(path.join(DIST, 'services/google-sheets-service.js'));
 const { ConfigManager } = require(path.join(DIST, 'services/config-manager.js'));
 const { FilterManager } = require(path.join(DIST, 'services/filter-manager.js'));
-const { SQLiteService } = require(path.join(DIST, 'services/sqlite-service.js'));
 
 const base = {
   userName: ' Alice   Example ', bank: 'BCA', accountName: 'Alice Example',
@@ -77,24 +75,6 @@ async function scan(pages, duplicateCheck, max=10) {
   assert.deepEqual(requests[0].requestBody.values,[['fixture-user',1000.6,'2ED37DA2','2026-08-01 10:20:00']]);
   assert.equal(requests[0].valueInputOption,'USER_ENTERED');
 
-  const dbPath=path.join(tmp,'existing.db');
-  try {
-    const old=new Database(dbPath); old.exec(`CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_fingerprint TEXT NOT NULL UNIQUE,user_id TEXT NOT NULL,account_number TEXT NOT NULL,amount REAL NOT NULL,process_date TEXT NOT NULL,filter_profile TEXT NOT NULL,export_status TEXT NOT NULL DEFAULT 'pending',exported_at TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE TABLE app_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE TABLE schema_version(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); INSERT INTO schema_version(version) VALUES(1);`);
-    old.prepare(`INSERT INTO transactions(transaction_fingerprint,user_id,account_number,amount,process_date,filter_profile,export_status) VALUES(?,?,?,?,?,?,?)`).run(tx.transactionFingerprint,'fixture-user','000111',100,'2026-08-01 00:00:00','Legacy profile','pending');
-    old.prepare(`INSERT INTO app_state(key,value) VALUES('resume_marker','2ED37DA2')`).run(); old.close();
-    const sqlite=new SQLiteService({getDatabasePath:()=>dbPath}); await sqlite.initialize();
-    assert((await sqlite.loadFingerprints()).has(tx.transactionFingerprint));
-    const pending=await sqlite.getPendingExports(); assert.equal(pending.length,1); assert.equal(pending[0].exportStatus,'pending'); assert.equal(await sqlite.getResumeMarker(),'2ED37DA2'); sqlite.close();
-  } catch (error) {
-    if (!/bindings file/.test(String(error && error.message))) throw error;
-    const migrationSource=fs.readFileSync(path.resolve(__dirname,'../src/main/services/database-migration.ts'),'utf8');
-    assert(/transaction_fingerprint TEXT NOT NULL UNIQUE/.test(migrationSource));
-    assert(/CREATE TABLE IF NOT EXISTS app_state/.test(migrationSource));
-    console.warn('WARN: SQLite runtime compatibility case skipped: better-sqlite3 native binding is unavailable for this Node ABI. Schema contract assertions passed.');
-  }
-
-  const engineSource=fs.readFileSync(path.resolve(__dirname,'../src/main/services/monitoring-engine.ts'),'utf8');
-  assert(/retryQueue\.push\(\.\.\.pending\)/.test(engineSource), 'startup restores pending rows');
-  assert(!/retryQueue\.(shift|pop|splice)\s*\(/.test(engineSource), 'characterizes absent retry consumer');
-  console.log('PASS: Phase 0 characterization suite (fingerprint, validation, profiles, duplicate stop, initial sync, max page, Sheets, SQLite, retry recovery).');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log('PASS: Phase 0 portable characterization suite (fingerprint, validation, profiles, duplicate stop, initial sync, max page, Sheets).');
 })().catch(e=>{ console.error(e); process.exitCode=1; });

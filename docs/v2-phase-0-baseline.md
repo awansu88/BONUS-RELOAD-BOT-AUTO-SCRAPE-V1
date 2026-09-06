@@ -51,7 +51,7 @@ Manual mode is enabled unless `features.manualDateMode === false` (default true)
 
 ### SQLite
 
-Migration version 1 uses `schema_version`. `transactions.transaction_fingerprint` is `NOT NULL UNIQUE`, with indexes on fingerprint, process date, export status, and created-at. Rows include user ID, account number, amount, process date, filter profile, status, exported timestamp, and insertion timestamp. `app_state` is a key/value table holding `resume_marker`. There is no separate retry table: `export_status='pending'` is durable retry representation. Inserts use `INSERT OR IGNORE`; no schema change was introduced in Phase 0. The compatibility test opens a version-1 fixture and verifies fingerprint, pending row, and marker access.
+Migration version 1 uses `schema_version`. `transactions.transaction_fingerprint` is `NOT NULL UNIQUE`, with indexes on fingerprint, process date, export status, and created-at. Rows include user ID, account number, amount, process date, filter profile, status, exported timestamp, and insertion timestamp. `app_state` is a key/value table holding `resume_marker`. There is no separate retry table: `export_status='pending'` is durable retry representation. Inserts use `INSERT OR IGNORE`; no schema change was introduced in Phase 0. The dedicated `test:phase0:sqlite` gate runs under Electron, creates and opens a sanitized version-1 fixture through `SQLiteService`, and verifies fingerprint, pending row, and marker access. An unavailable Electron/native binding makes that command fail; static checks are not accepted as a substitute.
 
 ## Retry Queue Findings
 
