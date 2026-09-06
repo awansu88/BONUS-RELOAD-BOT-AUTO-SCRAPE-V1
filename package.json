@@ -22,6 +22,8 @@
     "test:phase0": "npm run build:main && node scripts/verify-phase0-baseline.js",
     "test:phase0:sqlite": "npm run build:main && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/verify-phase0-sqlite-runtime.js",
     "test:phase0:all": "npm run test:phase0 && npm run test:phase0:sqlite",
+    "test:phase1:recovery": "npm run build:main && node scripts/verify-phase1-recovery.js",
+    "test:phase1:sqlite": "npm run build:main && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/verify-phase1-sqlite-recovery.js",
     "portable:summary": "node scripts/portable-build-summary.js",
     "prepack:portable": "npm run bundle:browser && npm run verify:browser-bundle",
     "dist": "npm run build && npm run prepack:portable && electron-builder --win --x64 && npm run portable:summary",
