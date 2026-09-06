@@ -93,10 +93,10 @@ export class GoogleSheetsService {
       
       const spreadsheetTitle = spreadsheet.data.properties?.title || 'Unknown';
       const worksheets = spreadsheet.data.sheets || [];
-      const masterWorksheet = worksheets.find(s => s.properties?.title === WORKSHEET_NAME);
+      const masterWorksheet = worksheets.find((s: any) => s.properties?.title === WORKSHEET_NAME);
       
       if (!masterWorksheet) {
-        const available = worksheets.map(s => s.properties?.title).filter(Boolean).join(', ');
+        const available = worksheets.map((s: any) => s.properties?.title).filter(Boolean).join(', ');
         throw new Error(`Worksheet "MASTER" not found. Available: ${available || 'none'}`);
       }
       

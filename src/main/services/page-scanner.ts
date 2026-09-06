@@ -209,7 +209,7 @@ export class PageScanner {
         rowsDetected: parse.rowsDetected,
         rowsParsed: parse.transactions.length,
         rowsRejected: parse.rejections.length,
-        duplicate: 0, buffered: 0, exported: 0
+        duplicate: duplicateOnPage, buffered: 0, exported: 0
       };
       perPage.push(pageStats);
       scanned++;
