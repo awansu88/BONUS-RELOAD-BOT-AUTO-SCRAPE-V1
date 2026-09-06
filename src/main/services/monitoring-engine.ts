@@ -11,6 +11,7 @@ import { GoogleSheetsService } from './google-sheets-service';
 import { ConfigManager } from './config-manager';
 import { getLogger } from './logger-service';
 import { AppConfig } from '../../types/config';
+import { PendingExportRecovery, PendingRecoveryResult } from './pending-export-recovery';
 
 export class MonitoringEngine {
   private state: MonitoringState = 'IDLE';
@@ -19,7 +20,7 @@ export class MonitoringEngine {
   private bufferFingerprints: Set<string> = new Set();
   private processedInCycle: Set<string> = new Set();
   private buffer: Transaction[] = [];
-  private retryQueue: Transaction[] = [];
+  private pendingExportRecovery: PendingExportRecovery;
   /**
    * Resume Marker — short KEY_ID (8-char upper-case fingerprint) of the
    * newest transaction confirmed as exported to Google Sheets. Persisted
@@ -79,7 +80,13 @@ export class MonitoringEngine {
     private sqliteService: SQLiteService,
     private googleSheetsService: GoogleSheetsService,
     private configManager: ConfigManager
-  ) {}
+  ) {
+    this.pendingExportRecovery = new PendingExportRecovery(
+      sqliteService,
+      googleSheetsService,
+      () => !this.isRunning,
+    );
+  }
   
   setStateChangeCallback(cb: (state: MonitoringState) => void): void {
     this.onStateChange = cb;
@@ -102,8 +109,7 @@ export class MonitoringEngine {
     
     const pending = await this.sqliteService.getPendingExports();
     if (pending.length > 0) {
-      logger.info(`Restored ${pending.length} pending exports`);
-      this.retryQueue.push(...pending);
+      logger.info(`Found ${pending.length} durable pending export(s) in SQLite`);
     }
     
     // Load the Resume Marker from SQLite. Cross-check with Google Sheets
@@ -124,10 +130,10 @@ export class MonitoringEngine {
     this.exportStats.googleSheetsConnected = this.googleSheetsService.isConnected();
     this.exportStats.manualDateMode = this.config?.features.manualDateMode !== false;
     this.exportStats.initialSyncMode = this.config?.features.initialSyncMode === true;
-    this.exportStats.retryQueueCount = this.retryQueue.length;
+    this.exportStats.retryQueueCount = pending.length;
     if (this.onStatsUpdate) this.onStatsUpdate({ ...this.exportStats });
     
-    logger.success(`Monitoring Engine initialized (fingerprints=${this.cachedFingerprints.size}, stored=${this.exportStats.storedTransactions}, pending=${this.retryQueue.length})`);
+    logger.success(`Monitoring Engine initialized (fingerprints=${this.cachedFingerprints.size}, stored=${this.exportStats.storedTransactions}, pending=${pending.length})`);
   }
   
   async validatePreRunChecks(): Promise<PreRunValidation> {
@@ -206,6 +212,10 @@ export class MonitoringEngine {
     // to skip when Sheets is unreachable — the SQLite marker (if any)
     // remains authoritative until the next successful export syncs it.
     await this.resolveResumeMarker();
+
+    // Startup recovery is independent of browser rediscovery and its
+    // fingerprint cache. The force option bypasses only cycle backoff.
+    await this.recoverPendingExports({ force: true });
     
     this.runMonitoringLoop().catch(error => {
       getLogger().error('Monitoring loop error', error);
@@ -312,6 +322,10 @@ export class MonitoringEngine {
     } catch (e: any) {
       getLogger().warn(`Config reload failed — using previous in-memory config. ${e?.message || e}`);
     }
+
+    // One cycle-triggered attempt only; failures are retained in SQLite and
+    // bounded backoff prevents API hammering on subsequent polling cycles.
+    await this.recoverPendingExports();
     
     // Reset per-cycle counters (persisted counters unaffected).
     this.cycleCounters = {
@@ -411,7 +425,7 @@ export class MonitoringEngine {
       `  Diagnostic Logging               : ${getLogger().isDiagEnabled() ? 'ENABLED' : 'disabled'}\n` +
       `  Fingerprints Loaded (init)       : ${this.exportStats.loadedFingerprints}\n` +
       `  Stored Transactions (SQLite)     : ${this.exportStats.storedTransactions}\n` +
-      `  Export Queue (retry)             : ${this.retryQueue.length}\n` +
+      `  Export Queue (SQLite pending)    : ${this.exportStats.retryQueueCount}\n` +
       '===================================================='
     );
     
@@ -614,10 +628,9 @@ export class MonitoringEngine {
   /**
    * Export the current buffer using a write-ahead pattern:
    *   1. Persist ALL buffered rows to SQLite as `pending` first.
-   *   2. Append to Google Sheets.
-   *   3. On success, mark those SQLite rows `exported`.
-   *   4. On failure, keep them in SQLite (`pending`) and stage them in the
-   *      retry queue for the next cycle. Never lose transactions in RAM.
+   *   2. Hand durable pending work to the single recovery owner.
+   *   3. That owner reconciles KEY_IDs, appends only missing rows, marks
+   *      SQLite exported, and advances the marker.
    *
    * This shrinks the data-loss window to zero for anything that reaches the
    * buffer, without changing the export batching or duplicate-detection
@@ -630,7 +643,6 @@ export class MonitoringEngine {
     const logger = getLogger();
     const count = this.buffer.length;
     const batch = this.buffer;
-    const fingerprints = batch.map(t => t.transactionFingerprint);
     
     // Step 1: SQLite write-ahead persistence.
     logger.info(`[STAGE] SQLite write-ahead persist: attempting ${count} row(s)…`);
@@ -639,77 +651,27 @@ export class MonitoringEngine {
       this.cycleCounters.sqliteInserted += count;
       logger.info(`[STAGE] SQLite write-ahead persist: SUCCESS (${count} row(s) inserted as 'pending')`);
     } catch (persistErr: any) {
-      logger.error(`[STAGE] SQLite write-ahead persist: FAILED — ${persistErr?.message || persistErr}`);
-      this.retryQueue.push(...batch);
+      logger.error('[STAGE] failure=LOCAL_PERSISTENCE — SQLite write-ahead persist failed; Sheets was not called and the candidate is not durable');
       throw persistErr;
     }
-    
-    // Step 2: Google Sheets append — but only when the client is configured.
-    // Sheets not being connected is a legitimate deployment state (fresh
-    // install, credential rotation) and MUST NOT lose transactions — they
-    // remain in SQLite as `pending` and export on the next cycle after
-    // credentials are configured.
-    if (!this.googleSheetsService.isConnected()) {
-      logger.warn(
-        `[STAGE] Google Sheets Batch Append: SKIPPED — Sheets not connected. ` +
-        `${count} row(s) persisted as 'pending' in SQLite; they will export automatically ` +
-        `once Google Sheets credentials are configured (Settings → Google Sheets).`
-      );
-      // Move to retry queue so next cycle picks them up.
-      this.retryQueue.push(...batch);
-      this.buffer = [];
-      this.bufferFingerprints.clear();
-      return;
-    }
-    
-    try {
-      logger.info(`[STAGE] Google Sheets Batch Append: starting for ${count} row(s)…`);
-      const sheetsStartedAt = Date.now();
-      const exportResult = await this.googleSheetsService.appendTransactions(batch);
-      this.cycleCounters.sheetsAppended += count;
-      logger.info(
-        `[STAGE] Google Sheets Batch Append: SUCCESS ` +
-        `(${count} row(s) → ${exportResult.destinationRange}, rows ${exportResult.startRow}..${exportResult.endRow}, ` +
-        `latency=${Date.now() - sheetsStartedAt}ms)`
-      );
-      
-      this.setState('UPDATING_CACHE');
-      logger.info(`[STAGE] Mark Exported: updating ${count} SQLite row(s) → 'exported'…`);
-      await this.sqliteService.updateExportStatus(fingerprints, 'exported');
-      this.cycleCounters.markedExported += count;
-      logger.info(`[STAGE] Mark Exported: SUCCESS (${count} row(s) marked 'exported')`);
-      
-      // Advance the Resume Marker ONLY after both Sheets append and
-      // Mark-Exported have succeeded — a crash before either step leaves
-      // the marker at its previous value and the affected rows in the
-      // retry queue as 'pending', so the next cycle re-attempts the
-      // export end-to-end.
-      const newestKeyId = this.fingerprintGen.getShortFingerprint(
-        batch[batch.length - 1].transactionFingerprint
-      );
-      await this.sqliteService.saveResumeMarker(newestKeyId);
-      this.resumeMarker = newestKeyId;
-      logger.info(`[STAGE] Resume Marker advanced → KEY_ID=${newestKeyId}`);
-      
+
+    // The candidates are durable now. Clear volatile buffering before the
+    // recovery owner reads SQLite; failed remote/local finalization leaves
+    // the database rows pending for a later cycle or restart.
+    this.buffer = [];
+    this.bufferFingerprints.clear();
+    const result = await this.recoverPendingExports();
+    this.cycleCounters.sheetsAppended += result.appended;
+    this.cycleCounters.markedExported += result.reconciled;
+    if (result.reconciled > 0) {
       this.exportStats.lastExportTime = new Date();
-      this.exportStats.lastExportCount = count;
-      
-      this.buffer = [];
-      this.bufferFingerprints.clear();
-      logger.info(`[STAGE] Batch complete: ${count} transaction(s) fully exported end-to-end.`);
-      
-    } catch (error: any) {
-      logger.error(`[STAGE] Google Sheets Batch Append: FAILED — ${error?.message || error}`);
-      this.retryQueue.push(...batch);
-      this.buffer = [];
-      this.bufferFingerprints.clear();
-      throw error;
+      this.exportStats.lastExportCount = result.reconciled;
     }
   }
   
   private async updateExportStats(): Promise<void> {
     this.exportStats.pendingQueueCount = this.buffer.length;
-    this.exportStats.retryQueueCount = this.retryQueue.length;
+    this.exportStats.retryQueueCount = (await this.sqliteService.getPendingExports()).length;
     this.exportStats.successfulExportsToday = await this.sqliteService.getTodayExportCount();
     this.exportStats.storedTransactions = await this.sqliteService.getStoredTransactionCount();
     this.exportStats.loadedFingerprints = this.cachedFingerprints.size;
@@ -731,6 +693,19 @@ export class MonitoringEngine {
   getExportStats(): ExportStats { return { ...this.exportStats }; }
   getState(): MonitoringState { return this.state; }
   isMonitoring(): boolean { return this.isRunning; }
+
+  /** Testable/manual lifecycle hook; all callers share the same guarded owner. */
+  async recoverPendingExports(options: { force?: boolean } = {}): Promise<PendingRecoveryResult> {
+    const result = await this.pendingExportRecovery.recover({
+      force: options.force,
+      batchSize: this.config?.monitoring.batchSize || 1000,
+    });
+    this.exportStats.retryQueueCount = result.skipped === 'RUNNING'
+      ? this.exportStats.retryQueueCount
+      : result.remaining;
+    if (result.reconciled > 0) this.resumeMarker = await this.sqliteService.getResumeMarker();
+    return result;
+  }
   
   private setState(newState: MonitoringState): void {
     this.state = newState;

@@ -256,6 +256,31 @@ export class GoogleSheetsService {
       return null;
     }
   }
+
+  /**
+   * Read MASTER column D once for pending-export reconciliation. Values are
+   * normalized to the frozen eight-character uppercase KEY_ID contract.
+   * Unlike the resume-marker convenience read, failures are surfaced so a
+   * recovery drain cannot mistake an unavailable read for an empty Sheet.
+   */
+  async getExportedKeyIds(): Promise<Set<string>> {
+    if (!this.sheetsClient || !this.currentConfig) {
+      throw new Error('Google Sheets client not initialized');
+    }
+    const response = await this.sheetsClient.spreadsheets.values.get({
+      spreadsheetId: this.currentConfig.spreadsheetId,
+      range: `${WORKSHEET_NAME}!${COLUMN.KEY_ID}2:${COLUMN.KEY_ID}`,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    });
+    const ids = new Set<string>();
+    for (const row of response.data.values || []) {
+      const value = row?.[0];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        ids.add(String(value).trim().toUpperCase());
+      }
+    }
+    return ids;
+  }
   
   /**
    * Append a batch of transactions to the MASTER worksheet.

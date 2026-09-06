@@ -102,3 +102,37 @@ Existing INFO telemetry includes total cycle milliseconds and pipeline counts fo
 4. Add safe redaction for fingerprint and rejected-DOM diagnostics as a separately reviewed security change.
 
 Phase 0 deliberately adds no HTTP scraper, worker concurrency, mode selector, adapter/resolver, schema migration, dedupe redesign, domain migration, or UI redesign.
+
+## V2 Phase 1 — Retry Queue Hardening
+
+### Durable source of truth and recovery owner
+
+Phase 1 makes `transactions.export_status='pending'` in the existing SQLite database the only durable retry source of truth. `PendingExportRecovery` is the single recovery owner. The former in-memory `retryQueue` is removed; the unchanged dashboard field named `retryQueueCount` now reports actual SQLite pending depth. Recovery reads accepted durable rows directly and never consults the browser fingerprint cache, so a cached fingerprint cannot strand an export.
+
+No schema, migration version, retry table, fingerprint input, normalization rule, or Sheet layout changes in this phase. Historical `failed` rows retain their existing meaning and are not consumed; only `pending` is recovered.
+
+### Startup and live flow
+
+After monitoring connects and performs the existing resume-marker reconciliation, it force-attempts one startup drain. If Sheets is unavailable, recovery is deferred and SQLite remains unchanged. Each monitoring cycle supplies another non-forced trigger, and newly accepted rows retain write-ahead order: SQLite pending persistence first, then the same recovery owner. A SQLite insert error is classified `LOCAL_PERSISTENCE`, does not call Sheets, and is not described as durable.
+
+Stop is cooperative: the owner checks the monitoring stop signal before remote reconciliation and before each append batch. It does not abort a Sheets request already in progress. A stopped or failed drain leaves unfinalized rows pending for a later cycle or process restart.
+
+### Reconciliation and partial success
+
+Each drain reads MASTER column D once and compares its values with pending rows using the existing first-eight-uppercase-SHA-1 KEY_ID contract. This short identity has a theoretical collision risk; changing it would break the frozen production contract and is intentionally out of Phase 1. Rows already remote are marked exported without another append. Missing rows are written using the existing `GoogleSheetsService.appendTransactions()` B:E / `USER_ENTERED` operation, then marked exported, then the existing resume marker is saved.
+
+A Sheets read/write failure is classified `SHEETS_APPEND`; affected rows remain pending and the marker does not advance. If Sheets succeeds but SQLite status or marker persistence fails, the failure is classified `LOCAL_FINALIZATION`. A still-pending row is safe on the next attempt because column D is reread before any append. If status succeeds but marker persistence fails, the row is already exported and is not selected again; the existing startup Sheet-marker reconciliation can repair the marker later. The marker remains an optimization and never suppresses inspection of SQLite pending state.
+
+### Ordering, batching, concurrency, and backoff
+
+`SQLiteService.getPendingExports()` continues to order by `process_date ASC`; recovery preserves that order and divides it into the configured monitoring batch size. One column-D read serves the drain, and each missing subset is written as one unambiguous batch. Already-present members of mixed batches are excluded from the write.
+
+An in-process in-flight guard permits only one drain across startup, cycle, and live triggers. Failed drains use bounded exponential cycle backoff (5 seconds, doubling to 60 seconds); there is no recursive retry or scheduling framework. The explicit startup attempt bypasses stale process-local backoff once, while normal cycle/live triggers respect it.
+
+### Observability and limitations
+
+Concise aggregate logs report pending count, batch size, already-remote/appended/reconciled/remaining counts, duration, running/unavailable deferrals, and the `LOCAL_PERSISTENCE`, `SHEETS_APPEND`, or `LOCAL_FINALIZATION` category. Recovery adds no customer identifiers or authentication material to logs.
+
+Remaining limitations are the frozen eight-character KEY_ID collision risk, cooperative rather than cancellable in-flight API shutdown, and marker repair after a status-success/marker-failure boundary occurring through the existing startup marker reconciliation. This is a single-process guard, not a distributed lock.
+
+**Phase 1 introduces NO FAST HTTP scraping architecture.** It adds no HTTP workers, adapters, source abstraction, browser/session redesign, authentication changes, or later-phase writer architecture.
