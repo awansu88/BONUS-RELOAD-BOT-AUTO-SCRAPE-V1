@@ -140,3 +140,30 @@ Skipped unavailable, stopped, and backoff results refresh their remaining count 
 Remaining limitations are the frozen eight-character KEY_ID collision risk, cooperative rather than cancellable in-flight API shutdown, and marker repair after a status-success/marker-failure boundary occurring through the existing startup marker reconciliation. This is a single-process guard, not a distributed lock.
 
 **Phase 1 introduces NO FAST HTTP scraping architecture.** It adds no HTTP workers, adapters, source abstraction, browser/session redesign, authentication changes, or later-phase writer architecture.
+
+## V2 Phase 2 — Source Abstraction
+
+### Architecture before and after
+
+Before Phase 2, acquisition was coupled directly to the business engine:
+
+```text
+MonitoringEngine
+→ PlaywrightService
+→ PageScanner
+```
+
+After Phase 2, acquisition crosses a transport-neutral boundary:
+
+```text
+MonitoringEngine
+→ SourceAdapter
+→ LegacyBrowserSourceAdapter
+→ PlaywrightService + PageScanner
+```
+
+`SourceAdapter` accepts only source execution inputs and returns existing `RawTransaction` rows together with the full pagination result metadata. `LegacyBrowserSourceAdapter` is the only production adapter. It forwards the existing filter payload and Manual Date option to `PlaywrightService`, then configures and invokes the existing `PageScanner`. The scanner still owns browser pagination and `HTMLMapper` still owns browser DOM mapping.
+
+`MonitoringEngine` retains validation, fingerprint generation, the in-cycle and SQLite-backed duplicate predicate, buffering, SQLite persistence, pending recovery, Sheets export, pagination summaries, and fatal-cycle decisions. In particular, collected rows are processed before fatal navigation metadata is acted upon, and unavailable-profile errors continue to propagate to the existing per-profile skip logic.
+
+Phase 2 implements no FAST or HTTP source, source selector, fallback, authentication/session extraction, concurrency, request retry, endpoint, query resolver, schema change, Sheet change, or UI control. It changes no operator behavior and makes no performance improvement claim: production still follows the same browser and `PageScanner` path, so expected performance is approximately unchanged.

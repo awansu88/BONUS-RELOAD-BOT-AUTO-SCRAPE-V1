@@ -5,21 +5,14 @@ import { HTMLMapper } from './html-mapper';
 import { SELECTORS } from '../../utils/selector-repository';
 import { getLogger } from './logger-service';
 import { extractPageNumber, urlHasPageMarker } from '../../utils/date-utils';
+import type { PageStats, ScanTerminationReason, SourceScanResult } from '../sources/source-adapter';
 
 /**
  * Per-page counters that MonitoringEngine uses to render the diagnostic
  * "Page N Summary" block. `duplicate` / `buffered` / `exported` are filled
  * in by the engine after processing.
  */
-export interface PageStats {
-  pageNumber: number;
-  rowsDetected: number;
-  rowsParsed: number;
-  rowsRejected: number;
-  duplicate: number;
-  buffered: number;
-  exported: number;
-}
+export type { PageStats, ScanTerminationReason, SourceScanResult as ScanResult } from '../sources/source-adapter';
 
 /**
  * PATCH 12 — Scan termination classification.
@@ -29,34 +22,6 @@ export interface PageStats {
  * failures (which are still cycle-fatal). Kept as a string union to
  * remain compatible with existing pass-by-value plumbing.
  */
-export type ScanTerminationReason =
-  | 'END_OF_PAGINATION'   // reached the actual last page (Next disabled/missing/loops)
-  | 'MAX_SCAN_REACHED'    // configured maxPageScan hit
-  | 'FULL_DUPLICATE_PAGE' // first page where every parsed row is already known
-  | 'STOP_REQUESTED'      // operator hit Stop Monitoring
-  | 'NAVIGATION_FAILURE'  // click did not land on expected page (real DOM/browser issue)
-  | 'BROWSER_FAILURE';    // browser crashed, page unavailable, no HTML
-
-export interface ScanResult {
-  transactions: RawTransaction[];
-  /** One entry per scanned page, in traversal order. */
-  perPage: PageStats[];
-  /**
-   * True when scanning stopped because navigation verification failed.
-   * PATCH 12: Kept for backwards compatibility with any external caller,
-   * but callers should prefer `terminationReason` — this flag is now ONLY
-   * set for the real fatal cases (NAVIGATION_FAILURE / BROWSER_FAILURE),
-   * never for END_OF_PAGINATION.
-   */
-  navigationFailure: boolean;
-  /** PATCH 12 — classified termination reason (see ScanTerminationReason). */
-  terminationReason: ScanTerminationReason;
-  /** PATCH 12 — highest page number the scanner actually parsed rows on. */
-  lastPageScanned: number;
-  /** PATCH 12 — configured maxPageScan passed into this run (echoed back for logging). */
-  configuredMaxPage: number;
-}
-
 export class PageScanner {
   private htmlMapper: HTMLMapper;
   private shouldStop: () => boolean = () => false;
@@ -107,7 +72,7 @@ export class PageScanner {
    *   after click: verify BOTH URL page and widget active page equal expected
    *   any mismatch → log FAIL block, mark navigationFailure=true, STOP.
    */
-  async scanPages(filter: FilterProfile, maxPages: number = 10): Promise<ScanResult> {
+  async scanPages(filter: FilterProfile, maxPages: number = 10): Promise<SourceScanResult> {
     const logger = getLogger();
     const allTransactions: RawTransaction[] = [];
     const perPage: PageStats[] = [];
