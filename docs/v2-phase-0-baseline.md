@@ -195,3 +195,27 @@ Status remains locked to the Legacy production invariant `Approve`; stored profi
 Manual Date Mode preserves the browser-selected From and To strings exactly and requires both to be available and nonblank. Auto Date Mode resolves both dates from the injected/current local time through the existing `formatPanelDate` formatter. Resolution does not mutate either browser date field.
 
 The typed error model exposes machine-readable code and field metadata without cookies, sessions, authentication material, raw HTML, or transaction/customer data. Dormant profile fields remain outside the resolved object. Phase 3 does not connect this resolver to `MonitoringEngine` or `LegacyBrowserSourceAdapter`, and adds no HTTP execution, endpoint/query encoding, authentication extraction, FAST adapter, concurrency, schema, Sheets, fingerprint, persistence, or UI change. Production continues to run Legacy browser scraping with unchanged behavior and no claimed speed improvement.
+
+## Phase 4 — Raw HTTP HTML Parser
+
+Phase 4 adds a dormant, synchronous parsing boundary:
+
+```text
+raw HTML
+→ response classification
+→ known-layout registry
+→ RawTransaction parsing
+→ pagination metadata
+```
+
+`RawHttpHtmlParser` is browser- and transport-independent. It accepts only a raw HTML string, uses Cheerio for server-side parsing, does not log or retain the response, and performs no request or business filtering. It requires `table.table.table-striped.b-t`; an unrelated table cannot become a successful empty response.
+
+The explicit raw-parser registry supports only `17H/15B`, `16H/16B`, and `16H/15B`, matching the frozen Legacy mappings. Selection uses actual `<thead>` header-cell count and transaction body-cell count. An unknown header or transaction-shaped body, including one mixed with known rows, fails the whole result closed as `UNKNOWN_LAYOUT`. Zero-cell and whitespace-only placeholders are silent; summary rows of six cells or fewer are non-fatal skips.
+
+Recognized rows emit the unchanged `RawTransaction` fields in source order. Required fields remain User Name, Account Number, Amount, and Process Date. Ordinary text follows Legacy `textContent → trim → collapse whitespace` semantics. Amount parsing remains non-`0-9.-` removal, `parseFloat`, and `Math.round`. Created At has no fallback. For Account Number only, a nonblank `data-bank-number` takes priority; normalized visible text is the fallback.
+
+Classifications distinguish `DEPOSIT_TABLE`, `EMPTY_DEPOSIT_TABLE`, `LOGIN_PAGE`, `PERMISSION_OR_ERROR_PAGE`, `UNKNOWN_LAYOUT`, and `INVALID_HTML`. Login and conservative access/application-error signals are evaluated only when the required table is absent. Diagnostics contain structural facts and error codes—not response bodies, row HTML, or customer cell values.
+
+Pagination extraction is metadata-only and scoped to `ul.pagination`, `nav.pagination`, or `.pagination`. It returns the current page and only an exact `N+1` link while preserving the server href. It ignores unrelated links, rejects inconsistent or ambiguous Next controls, and does not accept disabled or looping links. It constructs no origin or URL and performs no navigation.
+
+There is no production impact. The Legacy browser source, `PageScanner`, and `HTMLMapper` remain active. Phase 4 adds no HTTP source, authentication/session handling, worker, retry, concurrency, source selector, persistence, Sheets, fingerprint, or UI behavior.
