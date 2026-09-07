@@ -8,7 +8,8 @@ import {
 export enum RawHttpResponseClassification {
   DEPOSIT_TABLE = 'DEPOSIT_TABLE', EMPTY_DEPOSIT_TABLE = 'EMPTY_DEPOSIT_TABLE',
   LOGIN_PAGE = 'LOGIN_PAGE', PERMISSION_OR_ERROR_PAGE = 'PERMISSION_OR_ERROR_PAGE',
-  UNKNOWN_LAYOUT = 'UNKNOWN_LAYOUT', INVALID_HTML = 'INVALID_HTML'
+  UNKNOWN_LAYOUT = 'UNKNOWN_LAYOUT', MALFORMED_DEPOSIT_TABLE = 'MALFORMED_DEPOSIT_TABLE',
+  INVALID_HTML = 'INVALID_HTML'
 }
 
 export enum RawHttpParseErrorCode {
@@ -45,6 +46,9 @@ export interface RawHttpParseResult {
 }
 
 const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
+const REQUIRED_HEADER_LABELS = new Set([
+  'user name', 'account number', 'amount', 'status', 'process date', 'created at'
+]);
 
 export class RawHttpHtmlParser {
   parse(html: string): RawHttpParseResult {
@@ -55,12 +59,16 @@ export class RawHttpHtmlParser {
     const headerLabels = table.find('thead tr').first().find('th').toArray()
       .map(cell => normalizeText($(cell).text()));
     const headerCount = headerLabels.length;
+    const normalizedHeaderLabels = new Set(headerLabels.map(label => label.toLowerCase()));
+    const recognizedHeaderSignature = [...REQUIRED_HEADER_LABELS]
+      .every(label => normalizedHeaderLabels.has(label));
     const rows = table.find('tbody > tr').toArray();
     const transactions: RawTransaction[] = [];
     const rejections: RawHttpRowRejection[] = [];
     const bodyCounts: number[] = [];
     const layoutNames = new Set<string>();
     let unknown = headerCount === 0;
+    let malformed = false;
 
     rows.forEach((row, offset) => {
       const rowIndex = offset + 1;
@@ -90,11 +98,13 @@ export class RawHttpHtmlParser {
       const values = Object.fromEntries(Object.keys(layout.map).map(key => [key, read(key as DepositColumnKey)])) as Record<DepositColumnKey, string>;
       const missingFields = REQUIRED_DEPOSIT_FIELDS.filter(key => !values[key]);
       if (missingFields.length) {
+        malformed = true;
         rejections.push({ rowIndex, code: RawHttpParseErrorCode.MISSING_REQUIRED_FIELD, bodyCount: cells.length, missingFields: [...missingFields] });
         return;
       }
       const amount = this.parseAmount(values.AMOUNT);
       if (Number.isNaN(amount)) {
+        malformed = true;
         rejections.push({ rowIndex, code: RawHttpParseErrorCode.INVALID_AMOUNT, bodyCount: cells.length });
         return;
       }
@@ -104,13 +114,15 @@ export class RawHttpHtmlParser {
         agent: values.AGENT, processDate: values.PROCESS_DATE, createdAt: values.CREATED_AT });
     });
 
-    const recognizedHeader = DEPOSIT_TABLE_LAYOUTS.some(layout => layout.headerCount === headerCount);
+    const recognizedHeader = recognizedHeaderSignature
+      && DEPOSIT_TABLE_LAYOUTS.some(layout => layout.headerCount === headerCount);
     if (!recognizedHeader) unknown = true;
     return {
       transactions, rejections, rowsDetected: rows.length,
       layout: { headerCount, bodyCounts, recognized: !unknown, layoutNames: [...layoutNames], headerLabels },
       pagination: this.pagination($),
       classification: unknown ? RawHttpResponseClassification.UNKNOWN_LAYOUT
+        : malformed ? RawHttpResponseClassification.MALFORMED_DEPOSIT_TABLE
         : transactions.length ? RawHttpResponseClassification.DEPOSIT_TABLE
           : RawHttpResponseClassification.EMPTY_DEPOSIT_TABLE,
       ...(unknown ? { pageErrorCode: RawHttpParseErrorCode.UNKNOWN_LAYOUT } : {})

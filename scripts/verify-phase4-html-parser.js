@@ -6,6 +6,8 @@ const root = path.join(__dirname, '..');
 const { RawHttpHtmlParser, RawHttpResponseClassification: C, RawHttpParseErrorCode: E } =
   require('../dist/main/main/sources/raw-http-html-parser');
 const { FingerprintGenerator } = require('../dist/main/main/services/fingerprint-generator');
+const { DEPOSIT_TABLE_LAYOUTS, OMITTED_COLUMN } =
+  require('../dist/main/main/sources/deposit-table-layouts');
 const parser = new RawHttpHtmlParser();
 const fixture = name => fs.readFileSync(path.join(__dirname, 'fixtures/phase4', name), 'utf8');
 const parse = name => parser.parse(fixture(name));
@@ -17,7 +19,10 @@ const expected = {
   processDate: '2026-08-01 10:01:00', createdAt: '2026-08-01 10:00:00'
 };
 
-for (const [name, layout] of [['layout-17h-15b.html','17H/15B'], ['layout-16h-16b.html','16H/16B']]) {
+for (const [name, layout] of [
+  ['layout-17h-15b.html','17H/15B — production standard row (Payment Type + col-17 omitted)'],
+  ['layout-16h-16b.html','16H/16B — legacy full row']
+]) {
   const result = parse(name);
   assert.strictEqual(result.classification, C.DEPOSIT_TABLE);
   assert.deepStrictEqual(result.transactions, [expected]);
@@ -30,9 +35,15 @@ assert.deepStrictEqual(Object.keys(parse('layout-17h-15b.html').transactions[0])
 const replace = (html, from, to) => parser.parse(html.replace(from, to));
 let result = replace(fixture('layout-17h-15b.html'), 'data-bank-number="7976181505">797-618-1505', 'data-bank-number=" ">   ');
 assert.strictEqual(result.rejections[0].code, E.MISSING_REQUIRED_FIELD);
+assert.strictEqual(result.transactions.length, 0);
+assert.strictEqual(result.classification, C.MALFORMED_DEPOSIT_TABLE); // Case AA
+assert.notStrictEqual(result.classification, C.EMPTY_DEPOSIT_TABLE);
+assert.notStrictEqual(result.classification, C.DEPOSIT_TABLE);
 result = replace(fixture('layout-17h-15b.html'), 'IDR 100,763.49', 'not-a-number');
 assert.strictEqual(result.rejections[0].code, E.INVALID_AMOUNT);
 assert.strictEqual(result.transactions.length, 0);
+assert.strictEqual(result.classification, C.MALFORMED_DEPOSIT_TABLE); // Case AB
+assert.notStrictEqual(result.classification, C.EMPTY_DEPOSIT_TABLE);
 for (const [input, amount] of [['100,763.00',100763],['IDR 100,763.00',100763],['100763',100763],['100763.49',100763],['100763.50',100764]]) {
   result = replace(fixture('layout-17h-15b.html'), 'IDR 100,763.49', input);
   assert.strictEqual(result.transactions[0].amount, amount);
@@ -68,6 +79,15 @@ assert.deepStrictEqual(result.transactions.map(t => t.userName), ['Example User'
 result = replace(fixture('layout-17h-15b.html'), '2026-08-01 10:00:00', '');
 assert.strictEqual(result.transactions[0].createdAt, '');
 
+// Case AC: one malformed known-layout row makes the complete page unsafe.
+const validRow = fixture('layout-17h-15b.html').match(/<tbody>([\s\S]*)<\/tbody>/)[1];
+const malformedRow = validRow.replace('data-bank-number="7976181505">797-618-1505', 'data-bank-number=" ">');
+result = parser.parse(fixture('layout-17h-15b.html').replace('</tbody>', malformedRow + '</tbody>'));
+assert.strictEqual(result.transactions.length, 1);
+assert.strictEqual(result.rejections[0].code, E.MISSING_REQUIRED_FIELD);
+assert.strictEqual(result.classification, C.MALFORMED_DEPOSIT_TABLE);
+assert.notStrictEqual(result.classification, C.DEPOSIT_TABLE);
+
 result = parse('pagination-page-1.html');
 assert.deepStrictEqual(result.pagination, { currentPage: 1, nextPageNumber: 2, nextHref: '/safe/deposits?page=2', hasNext: true, valid: true });
 result = parser.parse(fixture('empty.html').replace('<body>', '<body><a rel="next" href="?page=99">Other</a>'));
@@ -78,12 +98,28 @@ assert.strictEqual(result.pagination.valid, false);
 assert.strictEqual(result.pagination.hasNext, false);
 assert.strictEqual(parse('pagination-page-1.html').pagination.nextPageNumber, 2);
 
-// Registry parity and narrow executable security/wiring guards.
+// Case AD: Legacy imports this exact shared complete map, eliminating drift.
 const mapper = fs.readFileSync(path.join(root, 'src/main/services/html-mapper.ts'), 'utf8');
-for (const shape of [[17,15],[16,16],[16,15]]) assert(mapper.includes(`headerCount: ${shape[0]}`) && mapper.includes(`bodyCount: ${shape[1]}`));
+assert(/import \{[\s\S]*DEPOSIT_TABLE_LAYOUTS[\s\S]*\} from ['"]\.\.\/sources\/deposit-table-layouts['"]/.test(mapper));
+const columns = ['SEQUENCE','USER_NAME','BANK','ACCOUNT_NAME','ACCOUNT_NUMBER','PAYMENT_ID','CURRENCY','AMOUNT','STATUS','EXTERNAL_ID','DONE','DEPOSIT_TYPE','PAYMENT_TYPE','AGENT','PROCESS_DATE','CREATED_AT'];
+const expectedMaps = {
+  '17/15': [0,1,2,3,4,5,6,7,8,9,10,11,OMITTED_COLUMN,12,13,14],
+  '16/16': [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+  '16/15': [0,1,2,3,4,5,6,7,8,9,10,11,OMITTED_COLUMN,12,13,14]
+};
+for (const layout of DEPOSIT_TABLE_LAYOUTS)
+  assert.deepStrictEqual(columns.map(column => layout.map[column]), expectedMaps[`${layout.headerCount}/${layout.bodyCount}`]);
+
+// Case AE: header count alone cannot authenticate an empty deposit table.
+const wrongHeaders = fixture('empty.html').replace(/<th>[^<]*<\/th>/g, '<th>Unrelated</th>');
+result = parser.parse(wrongHeaders);
+assert.strictEqual(result.classification, C.UNKNOWN_LAYOUT);
+assert.notStrictEqual(result.classification, C.EMPTY_DEPOSIT_TABLE);
+
+// Narrow executable security/wiring guards.
 const source = fs.readFileSync(path.join(root, 'src/main/sources/raw-http-html-parser.ts'), 'utf8');
 for (const forbidden of [/\bfetch\s*\(/, /from ['"]axios['"]/, /\bcontext\.request\b/, /\bbrowserContext\.request\b/, /\b(cookie|authorization|csrf|xsrf)\b/i]) assert(!forbidden.test(source));
 for (const file of ['src/main/services/monitoring-engine.ts','src/main/sources/legacy-browser-source-adapter.ts','src/main/sources/filter-request-resolver.ts'])
   assert(!fs.readFileSync(path.join(root, file), 'utf8').includes('RawHttpHtmlParser'));
 
-console.log('Phase 4 raw HTTP HTML parser verification passed (Cases A-Z, parity, and security guards).');
+console.log('Phase 4 raw HTTP HTML parser verification passed (Cases A-AE, parity, and security guards).');
