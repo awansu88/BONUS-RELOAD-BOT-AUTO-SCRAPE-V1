@@ -169,3 +169,29 @@ MonitoringEngine
 The transport-neutral scan-start hook preserves the Legacy lifecycle boundary: it fires only after source preparation and filter application succeed, immediately before scanner configuration and acquisition. Page-unavailable and filter-application failures never transition the engine to `SCANNING_PAGE`.
 
 Phase 2 implements no FAST or HTTP source, source selector, fallback, authentication/session extraction, concurrency, request retry, endpoint, query resolver, schema change, Sheet change, or UI control. It changes no operator behavior and makes no performance improvement claim: production still follows the same browser and `PageScanner` path, so expected performance is approximately unchanged.
+
+## V2 Phase 3 — Filter Request Resolution
+
+Phase 3 adds a future-facing, transport-neutral preparation boundary:
+
+```text
+FilterProfile
++
+Runtime Filter Snapshot
+        |
+        v
+FilterRequestResolver
+        |
+        v
+ResolvedFilterRequest
+```
+
+The browser-backed snapshot provider is read-only. It inspects Payment, Deposit Status, and Agent through the central `SELECTORS` repository and reads the two current date values. Controls are represented explicitly as `SELECT`, `FREE_TEXT`, or `UNAVAILABLE`; a failed query and a select with zero options are therefore not conflated. Option values and labels are trimmed at acquisition.
+
+Payment compatibility treats `payment` and legacy `depositType` as two representations of one request. Either field may supply it, equal trimmed values agree, blanks mean no Payment restriction, and conflicting nonblank values fail closed. Select matching always follows exact raw value, then unique exact label, then failure. Duplicate label rows are not ambiguous when all matching rows have the same raw value; more than one distinct raw value is ambiguous. There is no fallback to All, the first option, an arbitrary ID, case-insensitive/fuzzy matching, or removal of a requested restriction.
+
+Status remains locked to the Legacy production invariant `Approve`; stored profile status is deliberately ignored. Agent is preserved as a trimmed literal only when the snapshot explicitly identifies a free-text control. A select-backed Agent uses the same exact resolution rules, while an unavailable or unsupported control fails whenever an Agent restriction is requested.
+
+Manual Date Mode preserves the browser-selected From and To strings exactly and requires both to be available and nonblank. Auto Date Mode resolves both dates from the injected/current local time through the existing `formatPanelDate` formatter. Resolution does not mutate either browser date field.
+
+The typed error model exposes machine-readable code and field metadata without cookies, sessions, authentication material, raw HTML, or transaction/customer data. Dormant profile fields remain outside the resolved object. Phase 3 does not connect this resolver to `MonitoringEngine` or `LegacyBrowserSourceAdapter`, and adds no HTTP execution, endpoint/query encoding, authentication extraction, FAST adapter, concurrency, schema, Sheets, fingerprint, persistence, or UI change. Production continues to run Legacy browser scraping with unchanged behavior and no claimed speed improvement.
