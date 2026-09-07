@@ -25,6 +25,7 @@
     "test:phase1:recovery": "npm run build:main && node scripts/verify-phase1-recovery.js",
     "test:phase1:sqlite": "npm run build:main && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/verify-phase1-sqlite-recovery.js",
     "test:phase2:source": "npm run build:main && node scripts/verify-phase2-source.js",
+    "test:phase3:filter-resolution": "npm run build:main && node scripts/verify-phase3-filter-resolution.js",
     "portable:summary": "node scripts/portable-build-summary.js",
     "prepack:portable": "npm run bundle:browser && npm run verify:browser-bundle",
     "dist": "npm run build && npm run prepack:portable && electron-builder --win --x64 && npm run portable:summary",
