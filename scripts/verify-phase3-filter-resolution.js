@@ -91,7 +91,7 @@ const rejectsCode = (fn, code, field) => {
   const elements = {
     [SELECTORS.FILTER.DEPOSIT_TYPE]: { tagName: 'SELECT', options: [{ value: ' 286 ', textContent: ' Manual Deposit ' }] },
     [SELECTORS.FILTER.DEPOSIT_STATUS]: { tagName: 'SELECT', options: [{ value: ' Approve ', textContent: ' Approved ' }] },
-    [SELECTORS.FILTER.AGENT_INPUT]: { tagName: 'INPUT' },
+    [SELECTORS.FILTER.AGENT_INPUT]: { tagName: 'INPUT', getAttribute() { return null; } },
   };
   const fakePage = {
     async $eval(selector, callback) { calls.push(['$eval', selector]); if (!elements[selector]) throw new Error('missing'); return callback(elements[selector]); },
@@ -109,6 +109,36 @@ const rejectsCode = (fn, code, field) => {
   }};
   assert.strictEqual((await new PlaywrightFilterRuntimeProvider(missingPage).readSnapshot()).payment.kind, 'UNAVAILABLE');
 
+  // Y: a placeholder's blank raw value can never satisfy an explicit restriction.
+  rejectsCode(() => resolve({ depositType: 'All' }, {
+    payment: select([['', 'All']]),
+  }), 'PAYMENT_UNAVAILABLE');
+  rejectsCode(() => resolve({ agent: 'All Agents' }, {
+    agent: select([['', 'All Agents']]),
+  }), 'AGENT_UNAVAILABLE');
+  rejectsCode(() => resolve({}, {
+    status: select([['', 'Approve']]),
+  }), 'STATUS_UNAVAILABLE');
+  assert.ok(!('payment' in resolve({}, { payment: select([['', 'All']]) })));
+
+  // Z: only actual text-entry controls are FREE_TEXT; non-text inputs are unsupported.
+  const controlKind = async (tagName, type) => {
+    const controlPage = {
+      async $eval(selector, callback) {
+        return callback({ tagName, getAttribute(name) { return name === 'type' ? type : null; } });
+      },
+      async inputValue() { return 'date'; },
+    };
+    return (await new PlaywrightFilterRuntimeProvider(controlPage).readSnapshot()).agent.kind;
+  };
+  assert.strictEqual(await controlKind('INPUT', null), 'FREE_TEXT');
+  assert.strictEqual(await controlKind('INPUT', 'text'), 'FREE_TEXT');
+  assert.strictEqual(await controlKind('INPUT', 'search'), 'FREE_TEXT');
+  assert.strictEqual(await controlKind('TEXTAREA', null), 'FREE_TEXT');
+  for (const type of ['hidden', 'checkbox', 'radio']) {
+    assert.strictEqual(await controlKind('INPUT', type), 'UNAVAILABLE');
+  }
+
   // Structural freeze: preparation has no transport and production Legacy does not import it.
   const resolverSource = fs.readFileSync(path.join(ROOT, 'src/main/sources/filter-request-resolver.ts'), 'utf8');
   const providerSource = fs.readFileSync(path.join(ROOT, 'src/main/sources/filter-runtime-provider.ts'), 'utf8');
@@ -120,5 +150,5 @@ const rejectsCode = (fn, code, field) => {
     assert.ok(!source.includes('FilterRequestResolver'));
   }
 
-  console.log('PASS: Phase 3 filter resolution cases A-X and read-only/transport structural guards.');
+  console.log('PASS: Phase 3 filter resolution cases A-Z and read-only/transport structural guards.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -36,8 +36,14 @@ export class PlaywrightFilterRuntimeProvider implements FilterRuntimeProvider {
             })),
           };
         }
-        if (element.tagName.toUpperCase() === 'INPUT' || element.tagName.toUpperCase() === 'TEXTAREA') {
+        if (element.tagName.toUpperCase() === 'TEXTAREA') {
           return { kind: 'FREE_TEXT' as const };
+        }
+        if (element.tagName.toUpperCase() === 'INPUT') {
+          const inputType = (element.getAttribute('type') || 'text').trim().toLowerCase();
+          return inputType === 'text' || inputType === 'search'
+            ? { kind: 'FREE_TEXT' as const }
+            : { kind: 'UNAVAILABLE' as const };
         }
         return { kind: 'UNAVAILABLE' as const };
       });

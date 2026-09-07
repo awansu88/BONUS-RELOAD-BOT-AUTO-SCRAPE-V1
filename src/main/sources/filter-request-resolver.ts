@@ -104,7 +104,9 @@ function resolveSelect(
 
   // Duplicate DOM rows are one semantic choice when their raw values agree.
   const labelValues = [...new Set(
-    options.filter(option => option.label === requested).map(option => option.value),
+    options
+      .filter(option => option.label === requested && option.value !== '')
+      .map(option => option.value),
   )];
   if (labelValues.length === 1) return { value: labelValues[0], source: 'LABEL' };
   if (labelValues.length > 1) {
