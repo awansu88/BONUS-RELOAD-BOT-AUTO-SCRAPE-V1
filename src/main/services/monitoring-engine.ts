@@ -3,7 +3,6 @@ import { FilterProfile } from '../../types/filter-profile';
 import { MonitoringState, ExportStats, PreRunValidation, PreRunCheck } from '../../types/monitoring';
 import { PlaywrightService } from './playwright-service';
 import { FilterManager } from './filter-manager';
-import { PageScanner } from './page-scanner';
 import { TransactionValidator } from './transaction-validator';
 import { FingerprintGenerator } from './fingerprint-generator';
 import { SQLiteService } from './sqlite-service';
@@ -12,6 +11,8 @@ import { ConfigManager } from './config-manager';
 import { getLogger } from './logger-service';
 import { AppConfig } from '../../types/config';
 import { PendingExportRecovery, PendingRecoveryResult } from './pending-export-recovery';
+import type { SourceAdapter } from '../sources/source-adapter';
+import { LegacyBrowserSourceAdapter } from '../sources/legacy-browser-source-adapter';
 
 export class MonitoringEngine {
   private state: MonitoringState = 'IDLE';
@@ -21,6 +22,7 @@ export class MonitoringEngine {
   private processedInCycle: Set<string> = new Set();
   private buffer: Transaction[] = [];
   private pendingExportRecovery: PendingExportRecovery;
+  private sourceAdapter: SourceAdapter;
   /**
    * Resume Marker — short KEY_ID (8-char upper-case fingerprint) of the
    * newest transaction confirmed as exported to Google Sheets. Persisted
@@ -79,8 +81,10 @@ export class MonitoringEngine {
     private fingerprintGen: FingerprintGenerator,
     private sqliteService: SQLiteService,
     private googleSheetsService: GoogleSheetsService,
-    private configManager: ConfigManager
+    private configManager: ConfigManager,
+    sourceAdapter?: SourceAdapter,
   ) {
+    this.sourceAdapter = sourceAdapter ?? new LegacyBrowserSourceAdapter(playwrightService);
     this.pendingExportRecovery = new PendingExportRecovery(
       sqliteService,
       googleSheetsService,
@@ -454,40 +458,22 @@ export class MonitoringEngine {
   
   private async processFilter(filter: FilterProfile): Promise<void> {
     const filterStartedAt = Date.now();
-    const page = this.playwrightService.getPage();
-    if (!page) throw new Error('Browser page not available');
-    
     // Propagate the manual-date preference from config into the service.
     // Default: true (reliability > automation, per production directive).
     const manualDateMode = this.config?.features.manualDateMode !== false;
     
-    await this.playwrightService.applyFilter(
-      { name: filter.name, agent: filter.agent, depositType: filter.depositType },
-      { manualDateMode }
-    );
-    
-    this.setState('SCANNING_PAGE');
-    const scanner = new PageScanner(page);
-    // Cancellation signal — the scanner checks this at the top of every
-    // page iteration AND before/after each pagination click so Stop
-    // Monitoring interrupts the loop after the current page finishes
-    // instead of waiting for the whole cycle to end.
-    scanner.setShouldStop(() => !this.isRunning);
-    // Duplicate detector — the ONLY scan-termination signal (iter-9).
+    // The source receives the cooperative cancellation signal and the
+    // duplicate detector — the ONLY duplicate scan-termination signal.
     // Uses fingerprint + SQLite + the current in-cycle cache. When a full
     // page returns nothing new, the scanner stops. The engine still
     // receives every parsed row and runs the full pipeline (Essential
     // Field Check → fingerprint → dedup → buffer). Skipped in Initial
     // Sync Mode where every row is new by definition.
     const initialSyncMode = this.config?.features.initialSyncMode === true;
-    if (initialSyncMode) {
-      scanner.setDuplicateCheck(null);
-    } else {
-      scanner.setDuplicateCheck((raw) => {
+    const duplicateCheck = (raw: RawTransaction): boolean => {
         const fp = this.fingerprintGen.generate(raw);
         return this.processedInCycle.has(fp) || this.isDuplicate(fp);
-      });
-    }
+    };
     
     const maxPages = this.config?.monitoring.maxPageScan || 10;
     // PATCH 12 — capture the `buffered` counter BEFORE processing so we can
@@ -497,7 +483,17 @@ export class MonitoringEngine {
     // downstream-ready count so the operator can immediately verify
     // "collected pages > 0 → rows accepted > 0" (i.e. nothing was lost).
     const bufferedBefore = this.cycleCounters.buffered;
-    const result = await scanner.scanPages(filter, maxPages);
+    const result = await this.sourceAdapter.scan({
+      filter,
+      manualDateMode,
+      maxPages,
+      initialSyncMode,
+      shouldStop: () => !this.isRunning,
+      duplicateCheck,
+      // Preserve Legacy lifecycle ordering: source preparation (including
+      // filter application) must succeed before the scan state is exposed.
+      onScanStart: () => this.setState('SCANNING_PAGE'),
+    });
     
     // PATCH 12 — Process every collected transaction FIRST, regardless of
     // termination reason. Losing already-scanned rows because the pager
