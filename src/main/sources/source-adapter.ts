@@ -17,7 +17,10 @@ export type ScanTerminationReason =
   | 'FULL_DUPLICATE_PAGE'
   | 'STOP_REQUESTED'
   | 'NAVIGATION_FAILURE'
-  | 'BROWSER_FAILURE';
+  | 'BROWSER_FAILURE'
+  | 'HTTP_FAILURE'
+  | 'SESSION_EXPIRED'
+  | 'UNSAFE_RESPONSE';
 
 export interface SourceScanResult {
   transactions: RawTransaction[];

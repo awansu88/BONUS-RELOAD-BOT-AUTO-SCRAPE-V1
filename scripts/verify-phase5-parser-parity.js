@@ -165,7 +165,9 @@ function compareRejections(name, legacy, raw, expected) {
   };
   for (const [file, expected] of Object.entries(frozenHashes)) assert.strictEqual(canonicalHash(read(file)), expected, `${file} changed from Phase 4`);
   for (const file of ['src/main/services/monitoring-engine.ts','src/main/sources/legacy-browser-source-adapter.ts']) assert(!read(file).includes('RawHttpHtmlParser'), `${file} must not wire RawHttpHtmlParser`);
-  assert(!fs.readdirSync(path.join(root, 'src/main/sources')).some(name => /fast.*source-adapter/i.test(name)), 'no FAST SourceAdapter');
+  // Phase 6 intentionally adds a dormant FAST adapter. Phase 5's production-impact
+  // freeze now guards the original invariant: neither parser nor FAST is default-wired.
+  assert(!read('src/main/services/monitoring-engine.ts').includes('FastHttpSourceAdapter'), 'FAST remains dormant');
   const production = Object.keys(frozenHashes).map(read).join('\n');
   for (const forbidden of [/\bfetch\s*\(/,/from ['"]axios['"]/,/\bcontext\.request\b/,/\bbrowserContext\.request\b/,/\/deposit\/transactions/]) assert(!forbidden.test(production), `forbidden HTTP API ${forbidden}`);
 
