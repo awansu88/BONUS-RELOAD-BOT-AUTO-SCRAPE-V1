@@ -2,6 +2,10 @@ import { Page, ElementHandle } from 'playwright';
 import { RawTransaction } from '../../types/transaction';
 import { SELECTORS } from '../../utils/selector-repository';
 import { getLogger } from './logger-service';
+import {
+  DEPOSIT_TABLE_LAYOUTS, DepositColumnKey, DepositTableLayout,
+  FOOTER_ROW_MAX_CELLS, OMITTED_COLUMN, REQUIRED_DEPOSIT_FIELDS
+} from '../sources/deposit-table-layouts';
 
 /**
  * A row that could not be parsed into a RawTransaction. Emitted alongside
@@ -31,7 +35,7 @@ export interface ParseResult {
   rowsDetected: number;
 }
 
-type ColumnKey = keyof typeof SELECTORS.COLUMNS;
+type ColumnKey = DepositColumnKey;
 
 /**
  * Header-label → canonical-column-key map for the production deposit panel.
@@ -58,133 +62,10 @@ const HEADER_LABELS: Record<string, ColumnKey> = {
   'created at':       'CREATED_AT',
 };
 
-/**
- * Rows with this many cells (or fewer) are treated as footer / summary
- * rows (e.g. SubTotal / Total with `colspan`) and skipped without an error.
- */
-const FOOTER_ROW_MAX_CELLS = 6;
-
-/**
- * Fields the parser must extract successfully for a row to become a
- * candidate transaction. Any missing field rejects the row with an
- * operator-visible reason. This is the ONLY validation the parser does.
- */
-const REQUIRED_FIELDS: readonly ColumnKey[] = [
-  'USER_NAME', 'ACCOUNT_NUMBER', 'AMOUNT', 'PROCESS_DATE'
-];
-
-/**
- * Body index sentinel meaning "the canonical column exists in the header
- * but the server does NOT emit a matching `<td>` in this layout".
- */
-const OMITTED = -1;
-
-/**
- * Explicit production row-layout registry.
- *
- * Every legitimate production layout is enumerated here as a hard-coded
- * (headerCount, bodyCount) → { key → 0-based body index } table. The
- * parser looks up the current row's (H, B) shape and applies the layout
- * verbatim. There is no heuristic scoring, no subset enumeration, no
- * "best guess" alignment. Any (H, B) combination not present in this
- * table is treated as an unknown layout — the row is rejected fast with
- * a rich diagnostic so the missing layout can be added explicitly.
- *
- * Update procedure when the production panel changes:
- *   1. Read the rejection diagnostic emitted for the new (H, B) shape —
- *      it prints every header label, every body cell text, and the raw
- *      <tr> outerHTML for the failing row.
- *   2. Add a new entry to PRODUCTION_LAYOUTS mapping each canonical key
- *      to its correct 0-based body index (or OMITTED when the server
- *      does not emit a matching <td>).
- *   3. That is the entire code change — no other file needs editing.
- */
-interface ProductionLayout {
-  headerCount: number;
-  bodyCount: number;
-  /** Short operator-readable name for the layout — appears in the diag. */
-  name: string;
-  /** Canonical column key → 0-based body index. OMITTED when body-less. */
-  map: Record<ColumnKey, number>;
-}
-
-const PRODUCTION_LAYOUTS: readonly ProductionLayout[] = [
-  // ------------------------------------------------------------------
-  // Modern production panel (idns889.com, 2026-07 onward).
-  // Header renders 17 columns; body emits 15. The server omits two <td>s
-  // in this layout:
-  //   • Header col 13 — Payment Type
-  //   • Header col 17 — trailing verification/audit column (label unknown
-  //     to the alias table; visible in the raw thead diagnostic).
-  //
-  //   Body index → canonical column (verified against production HTML
-  //   captured during live monitoring on 2026-07-24):
-  //     0  SEQUENCE       ("5")
-  //     1  USER_NAME      ("honda1338")
-  //     2  BANK           ("bca")
-  //     3  ACCOUNT_NAME   ("sapriyanto tangkudung")
-  //     4  ACCOUNT_NUMBER ("797-618-1505")
-  //     5  PAYMENT_ID     ("honda1338")
-  //     6  CURRENCY       ("IDR")
-  //     7  AMOUNT         ("100,763.00")
-  //     8  STATUS         ("Approved")
-  //     9  EXTERNAL_ID    ("50623679-pga-6a626f3b27c5f")
-  //     10 DONE           ("Yes")
-  //     11 DEPOSIT_TYPE   ("PGA")
-  //     12 AGENT          ("N/A")
-  //     13 PROCESS_DATE   ("2026-07-24 02:45:43")
-  //     14 CREATED_AT     ("2026-07-24 02:45:00")
-  // ------------------------------------------------------------------
-  {
-    headerCount: 17,
-    bodyCount: 15,
-    name: '17H/15B — production standard row (Payment Type + col-17 omitted)',
-    map: {
-      SEQUENCE:       0,
-      USER_NAME:      1,
-      BANK:           2,
-      ACCOUNT_NAME:   3,
-      ACCOUNT_NUMBER: 4,
-      PAYMENT_ID:     5,
-      CURRENCY:       6,
-      AMOUNT:         7,
-      STATUS:         8,
-      EXTERNAL_ID:    9,
-      DONE:           10,
-      DEPOSIT_TYPE:   11,
-      PAYMENT_TYPE:   OMITTED,
-      AGENT:          12,
-      PROCESS_DATE:   13,
-      CREATED_AT:     14,
-    },
-  },
-  // ------------------------------------------------------------------
-  // Legacy 16-column header layouts (older panel builds — retained so an
-  // in-flight cycle does not break if the panel briefly reverts).
-  // ------------------------------------------------------------------
-  {
-    headerCount: 16,
-    bodyCount: 16,
-    name: '16H/16B — legacy full row',
-    map: {
-      SEQUENCE: 0,  USER_NAME: 1,  BANK: 2,   ACCOUNT_NAME: 3,
-      ACCOUNT_NUMBER: 4, PAYMENT_ID: 5, CURRENCY: 6, AMOUNT: 7,
-      STATUS: 8, EXTERNAL_ID: 9, DONE: 10, DEPOSIT_TYPE: 11,
-      PAYMENT_TYPE: 12, AGENT: 13, PROCESS_DATE: 14, CREATED_AT: 15,
-    },
-  },
-  {
-    headerCount: 16,
-    bodyCount: 15,
-    name: '16H/15B — legacy row with Payment Type omitted',
-    map: {
-      SEQUENCE: 0,  USER_NAME: 1,  BANK: 2,   ACCOUNT_NAME: 3,
-      ACCOUNT_NUMBER: 4, PAYMENT_ID: 5, CURRENCY: 6, AMOUNT: 7,
-      STATUS: 8, EXTERNAL_ID: 9, DONE: 10, DEPOSIT_TYPE: 11,
-      PAYMENT_TYPE: OMITTED, AGENT: 12, PROCESS_DATE: 13, CREATED_AT: 14,
-    },
-  },
-];
+const REQUIRED_FIELDS = REQUIRED_DEPOSIT_FIELDS;
+const OMITTED = OMITTED_COLUMN;
+type ProductionLayout = DepositTableLayout;
+const PRODUCTION_LAYOUTS = DEPOSIT_TABLE_LAYOUTS;
 
 interface HeaderInfo {
   /** Raw header labels read from `<thead>`, in DOM order. */
