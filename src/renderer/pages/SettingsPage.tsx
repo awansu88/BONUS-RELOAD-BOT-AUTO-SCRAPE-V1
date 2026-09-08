@@ -5,6 +5,7 @@ import { AppConfig } from '../../types/config';
 import { DEFAULT_CONFIG } from '../../utils/constants';
 import InfoCard from '../components/InfoCard';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { normalizeSourceMode, SourceMode } from '../../types/source-mode';
 
 /**
  * Settings — Iteration 11 layout polish only.
@@ -51,7 +52,7 @@ const SettingsPage: React.FC = () => {
     if (!config) return;
     const next: AppConfig = {
       ...config,
-      monitoring: { ...config.monitoring, pollingInterval: 2, maxPageScan: 10, retryCount: 3, batchSize: 1000 },
+      monitoring: { ...config.monitoring, sourceMode: 'LEGACY', pollingInterval: 2, maxPageScan: 10, retryCount: 3, batchSize: 1000 },
       database:   { ...config.database, cleanupDays: 7 },
       features:   { ...config.features, screenshotOnError: false, autoResume: true, autoReconnect: true,
                     diagnosticLogging: false, manualDateMode: true, initialSyncMode: false }
@@ -93,6 +94,20 @@ const SettingsPage: React.FC = () => {
 
       <InfoCard title="Monitoring" testId="settings-monitoring">
         <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+          <div className="col-span-2">
+            <label className="block text-xs text-text-secondary mb-1">Source Mode</label>
+            <select
+              data-testid="source-mode-select"
+              value={normalizeSourceMode(config.monitoring.sourceMode)}
+              onChange={(e) => setConfig({ ...config, monitoring: { ...config.monitoring, sourceMode: e.target.value as SourceMode } })}
+              disabled={isMonitoring}
+              className="w-full h-9 text-sm"
+            >
+              <option value="AUTO">AUTO — Prefer FAST when the authenticated browser session supports it; otherwise use Legacy next cycle.</option>
+              <option value="FAST">FAST — Force authenticated HTTP acquisition with two workers; prerequisites are required.</option>
+              <option value="LEGACY">LEGACY — Existing sequential browser scraper; compatibility / safest mode.</option>
+            </select>
+          </div>
           <div>
             <label className="block text-xs text-text-secondary mb-1">Polling Interval (seconds)</label>
             <input

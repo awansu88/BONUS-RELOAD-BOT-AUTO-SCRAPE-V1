@@ -1,7 +1,10 @@
+import type { SourceMode } from './source-mode';
+
 export interface AppConfig {
   version: string;
   panelUrl?: string;
   monitoring: {
+    sourceMode?: SourceMode;
     pollingInterval: number;
     maxPageScan: number;
     retryCount: number;

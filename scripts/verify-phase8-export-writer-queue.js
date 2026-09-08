@@ -148,9 +148,9 @@ const deferred = () => {
   assert.deepEqual(relativeAppendCallers, ['src/main/services/pending-export-recovery.ts']);
   assert.match(recoverySource, /googleSheetsService\.appendTransactions\(missing\)/);
 
-  // S-V: Legacy stays default and the Phase 9 FAST pool stays production-dormant.
-  assert.match(engineSource, /sourceAdapter \?\? new LegacyBrowserSourceAdapter/);
-  assert.ok(!engineSource.includes('FastHttpSourcePool'));
+  // S-V: Phase 10 owns one Legacy source and activates the Phase 9 pool via cycle selection.
+  assert.match(engineSource, /new LegacyBrowserSourceAdapter\(playwrightService\)/);
+  assert.match(engineSource, /new FastHttpSourcePool\(playwrightService\)/);
 
   console.log('PASS: Phase 8 export writer queue A-V (FIFO, isolation, options, wiring, and structural guards).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

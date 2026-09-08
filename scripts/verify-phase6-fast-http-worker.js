@@ -219,7 +219,8 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   for (const key of ['_token', 'csrf', 'xsrf', 'Authorization']) assert.strictEqual(query.has(key), false);
   assert.strictEqual(query.get('static'), 'kept'); assert.strictEqual(query.get('page'), null);
   const monitoring = fs.readFileSync(path.join(ROOT, 'src/main/services/monitoring-engine.ts'), 'utf8');
-  assert.match(monitoring, /sourceAdapter \?\? new LegacyBrowserSourceAdapter\(playwrightService\)/);
+  assert.match(monitoring, /new LegacyBrowserSourceAdapter\(playwrightService\)/);
+  assert.match(monitoring, /new FastHttpSourcePool\(playwrightService\)/);
   assert.doesNotMatch(monitoring, /FastHttpSourceAdapter/);
   const fastSource = fs.readFileSync(path.join(ROOT, 'src/main/sources/fast-http-source-adapter.ts'), 'utf8');
   assert.doesNotMatch(fastSource, /LegacyBrowserSourceAdapter|PageScanner|Promise\.all|request\.newContext/);
