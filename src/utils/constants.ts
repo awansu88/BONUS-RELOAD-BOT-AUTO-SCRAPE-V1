@@ -33,6 +33,7 @@ export const EXPECTED_HEADERS = {
 
 export const DEFAULT_CONFIG = {
   monitoring: {
+    sourceMode: 'LEGACY' as const,
     pollingInterval: 2,
     maxPageScan: 10,
     retryCount: 3,

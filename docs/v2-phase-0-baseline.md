@@ -320,3 +320,22 @@ export signals still contain no row payload and pass through the single FIFO
 production constructor still selects Legacy, which advertises no concurrency and therefore
 runs sequentially in original filter order. The FAST pool is not instantiated by production;
 there is no source mode selector, schema/dependency/UI change, or Phase 10 behavior.
+
+## V2 Phase 10 — AUTO / FAST / LEGACY Source Mode
+
+Phase 10 activates the two existing acquisition architectures behind the optional persisted
+`monitoring.sourceMode` setting. Only the exact `AUTO`, `FAST`, and `LEGACY` values are valid;
+missing or malformed values normalize to `LEGACY`, and fresh defaults are also conservative.
+The Settings Monitoring card exposes the setting and locks it while monitoring is active.
+
+Production owns one Legacy adapter and one two-worker FAST pool for the engine lifetime. At
+each cycle boundary the engine reloads config, evaluates existing FAST transport objects
+without probing or creating anything, logs the requested/effective mode, and captures exactly
+one source. AUTO chooses FAST only when the shared page, request context, and HTTP(S) origin are
+ready; otherwise it chooses Legacy. Explicit FAST retains FAST identity and fails its pre-run
+readiness check rather than falling back. Runtime/session/trust failures never change source.
+
+Concurrency comes only from the selected source (Legacy one, FAST two). Central ingest, SQLite
+schema v1 and atomic claim, resume marker, pending export recovery, single export writer, and
+Google Sheets output remain shared and unchanged. Phase 10 adds no retry, failover, schema,
+dependency, authentication, performance optimization, or production-hardening behavior.

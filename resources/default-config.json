@@ -1,6 +1,7 @@
 {
   "version": "1.0.0",
   "monitoring": {
+    "sourceMode": "LEGACY",
     "pollingInterval": 2,
     "maxPageScan": 10,
     "retryCount": 3,

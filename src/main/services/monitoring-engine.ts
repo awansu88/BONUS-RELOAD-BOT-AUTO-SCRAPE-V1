@@ -13,6 +13,9 @@ import { AppConfig } from '../../types/config';
 import { PendingExportRecovery, PendingRecoveryResult } from './pending-export-recovery';
 import type { SourceAdapter } from '../sources/source-adapter';
 import { LegacyBrowserSourceAdapter } from '../sources/legacy-browser-source-adapter';
+import { FastHttpSourcePool } from '../sources/fast-http-source-pool';
+import { SourceModeSelector } from '../sources/source-mode-selector';
+import { normalizeSourceMode } from '../../types/source-mode';
 import { CentralIngestService } from './central-ingest-service';
 import { ExportDrainOptions, ExportWriterQueue } from './export-writer-queue';
 
@@ -33,7 +36,8 @@ export class MonitoringEngine {
   private buffer: Transaction[] = [];
   private pendingExportRecovery: PendingExportRecovery;
   private exportWriterQueue: ExportWriterQueue;
-  private sourceAdapter: SourceAdapter;
+  private sourceAdapterOverride?: SourceAdapter;
+  private sourceModeSelector?: SourceModeSelector;
   private centralIngestService: CentralIngestService;
   /**
    * Resume Marker — short KEY_ID (8-char upper-case fingerprint) of the
@@ -96,7 +100,12 @@ export class MonitoringEngine {
     private configManager: ConfigManager,
     sourceAdapter?: SourceAdapter,
   ) {
-    this.sourceAdapter = sourceAdapter ?? new LegacyBrowserSourceAdapter(playwrightService);
+    this.sourceAdapterOverride = sourceAdapter;
+    if (!sourceAdapter) {
+      const legacySource = new LegacyBrowserSourceAdapter(playwrightService);
+      const fastSource = new FastHttpSourcePool(playwrightService);
+      this.sourceModeSelector = new SourceModeSelector(legacySource, fastSource, playwrightService);
+    }
     this.centralIngestService = new CentralIngestService(validator, fingerprintGen, sqliteService);
     this.pendingExportRecovery = new PendingExportRecovery(
       sqliteService,
@@ -156,6 +165,7 @@ export class MonitoringEngine {
   
   async validatePreRunChecks(): Promise<PreRunValidation> {
     const checks: PreRunCheck[] = [];
+    this.config = await this.configManager.loadAppConfig();
     
     checks.push({
       name: 'Browser Ready', status: this.playwrightService.isReady(),
@@ -172,6 +182,15 @@ export class MonitoringEngine {
       getLogger().success('Manual login validated');
     } else {
       getLogger().warn(`Login validation failed: ${session.reason}`);
+    }
+
+    const requestedMode = normalizeSourceMode(this.config?.monitoring.sourceMode);
+    if (!this.sourceAdapterOverride && requestedMode === 'FAST') {
+      const readiness = this.sourceModeSelector!.getFastReadiness();
+      checks.push({
+        name: 'FAST Transport Ready', status: readiness.ready, icon: '⚡',
+        error: `FAST transport unavailable: ${readiness.reason}`
+      });
     }
     
     checks.push({
@@ -341,6 +360,16 @@ export class MonitoringEngine {
       getLogger().warn(`Config reload failed — using previous in-memory config. ${e?.message || e}`);
     }
 
+    // Resolve once and retain the exact source for the entire cycle. Injected
+    // adapters remain fixed for Phase 2–9 fixtures and never construct FAST.
+    const selection = this.sourceAdapterOverride
+      ? { requestedMode: 'LEGACY' as const, effectiveMode: 'LEGACY' as const,
+          source: this.sourceAdapterOverride, reason: 'INJECTED' }
+      : this.sourceModeSelector!.selectForCycle(this.config?.monitoring.sourceMode);
+    const cycleSource = selection.source;
+    const concurrency = sourceConcurrency(cycleSource);
+    getLogger().info(`[SOURCE MODE] requested=${selection.requestedMode} effective=${selection.effectiveMode} reason=${selection.reason} concurrency=${concurrency}`);
+
     // One cycle-triggered attempt only; failures are retained in SQLite and
     // bounded backoff prevents API hammering on subsequent polling cycles.
     await this.recoverPendingExports();
@@ -377,7 +406,6 @@ export class MonitoringEngine {
       getLogger().info('Incremental monitoring — scan stops at the first page where every row is already in SQLite.');
     }
     
-    const concurrency = sourceConcurrency(this.sourceAdapter);
     let nextFilterIndex = 0;
     let groupAbortRequested = false;
     let fatalError: any = null;
@@ -387,7 +415,7 @@ export class MonitoringEngine {
         if (index >= filters.length) return;
         const filter = filters[index];
         try {
-          await this.processFilter(filter, () => groupAbortRequested);
+          await this.processFilter(filter, cycleSource, () => groupAbortRequested);
           appliedProfileCount++;
         } catch (error: any) {
           if (error && error.isProfileUnavailable) {
@@ -483,7 +511,11 @@ export class MonitoringEngine {
     getLogger().success(`Monitoring cycle completed in ${Date.now() - start}ms`);
   }
   
-  private async processFilter(filter: FilterProfile, groupShouldStop: () => boolean = () => false): Promise<void> {
+  private async processFilter(
+    filter: FilterProfile,
+    source: SourceAdapter = this.sourceAdapterOverride!,
+    groupShouldStop: () => boolean = () => false,
+  ): Promise<void> {
     const filterStartedAt = Date.now();
     // Propagate the manual-date preference from config into the service.
     // Default: true (reliability > automation, per production directive).
@@ -503,7 +535,7 @@ export class MonitoringEngine {
     };
     
     const maxPages = this.config?.monitoring.maxPageScan || 10;
-    const result = await this.sourceAdapter.scan({
+    const result = await source.scan({
       filter,
       manualDateMode,
       maxPages,

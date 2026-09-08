@@ -122,14 +122,14 @@ function makeEngine(source, profiles, claimTransaction = async () => true) {
     const file = path.join(dir, entry.name); if (entry.isDirectory()) collect(file); else if (entry.name.endsWith('.ts')) productionFiles.push(file);
   } })(path.join(ROOT, 'src/main'));
   assert.match(fastSource, /if \(this\.active\) throw new FastWorkerBusyError\(\)/);
-  assert.match(engineSource, /sourceAdapter \?\? new LegacyBrowserSourceAdapter/);
-  assert.ok(!engineSource.includes('FastHttpSourcePool'));
+  assert.match(engineSource, /new LegacyBrowserSourceAdapter\(playwrightService\)/);
+  assert.match(engineSource, /new FastHttpSourcePool\(playwrightService\)/);
   assert.ok(!/Promise\.all\s*\(\s*filters\.map/.test(engineSource));
   assert.ok(!poolSource.includes('newContext')); assert.ok(!poolSource.includes('cookies'));
   assert.equal((poolSource.match(/new FastHttpSourceAdapter/g) || []).length, 1);
   const appendCallers = productionFiles.filter(file => !file.endsWith('google-sheets-service.ts') && /\.appendTransactions\s*\(/.test(fs.readFileSync(file, 'utf8')));
   assert.deepEqual(appendCallers.map(file => path.relative(ROOT, file).split(path.sep).join('/')), ['src/main/services/pending-export-recovery.ts']);
   assert.ok(!fs.readFileSync(path.join(ROOT, 'src/main/services/export-writer-queue.ts'), 'utf8').includes('Transaction[]'));
-  assert.ok(!/\b(?:AUTO|FAST|LEGACY)\b/.test(JSON.stringify(require(path.join(ROOT, 'package.json')).scripts)));
+  assert.ok(require(path.join(ROOT, 'package.json')).scripts['test:phase10:source-mode']);
   console.log('PASS: Phase 9 FAST concurrency A-AD (pool, scheduler, cancellation, ingest, accounting, and writer boundaries).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

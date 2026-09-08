@@ -1,0 +1,54 @@
+/** Phase 10 portable source-mode tests. No browser, network, Electron, or Google API. */
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const ROOT = path.resolve(__dirname, '..');
+const DIST = path.join(ROOT, 'dist/main');
+const { normalizeSourceMode } = require(path.join(DIST, 'types/source-mode.js'));
+const { SourceModeSelector, evaluateFastReadiness } = require(path.join(DIST, 'main/sources/source-mode-selector.js'));
+const legacy = { scan() { throw new Error('not invoked'); } };
+const fast = { maxConcurrentScans: 2, scan() { throw new Error('not invoked'); } };
+const page = { isClosed: () => false, url: () => 'https://panel.example/deposits' };
+let pageReads = 0, contextReads = 0;
+const readySession = { getPage() { pageReads++; return page; }, getRequestContext() {
+  contextReads++; return { get() { throw new Error('readiness made a network request'); } }; } };
+
+assert.equal(normalizeSourceMode('AUTO'), 'AUTO');
+assert.equal(normalizeSourceMode('FAST'), 'FAST');
+assert.equal(normalizeSourceMode('LEGACY'), 'LEGACY');
+for (const value of [undefined, null, 'bad', 'fast', 'HTTP', 'browser']) assert.equal(normalizeSourceMode(value), 'LEGACY');
+let selector = new SourceModeSelector(legacy, fast, readySession);
+let selected = selector.selectForCycle('LEGACY'); assert.strictEqual(selected.source, legacy);
+selected = selector.selectForCycle('FAST'); assert.strictEqual(selected.source, fast); assert.equal(selected.effectiveMode, 'FAST');
+selected = selector.selectForCycle('AUTO'); assert.strictEqual(selected.source, fast); assert.equal(selected.reason, 'FAST_READY');
+assert.equal(pageReads, 2); assert.equal(contextReads, 2);
+const unavailableSession = { getPage: () => page, getRequestContext: () => null };
+selector = new SourceModeSelector(legacy, fast, unavailableSession);
+selected = selector.selectForCycle('AUTO'); assert.strictEqual(selected.source, legacy); assert.equal(selected.effectiveMode, 'LEGACY');
+selected = selector.selectForCycle('FAST'); assert.strictEqual(selected.source, fast); assert.equal(selected.effectiveMode, 'FAST');
+assert.equal(selected.reason, 'REQUEST_CONTEXT_UNAVAILABLE');
+assert.equal(evaluateFastReadiness({ getPage: () => ({ isClosed: () => true, url: () => 'https://x' }), getRequestContext: () => ({}) }).reason, 'BROWSER_PAGE_CLOSED');
+assert.equal(evaluateFastReadiness({ getPage: () => ({ isClosed: () => false, url: () => 'about:blank' }), getRequestContext: () => ({}) }).reason, 'INVALID_BROWSER_ORIGIN');
+
+const engine = fs.readFileSync(path.join(ROOT, 'src/main/services/monitoring-engine.ts'), 'utf8');
+const settings = fs.readFileSync(path.join(ROOT, 'src/renderer/pages/SettingsPage.tsx'), 'utf8');
+const constants = fs.readFileSync(path.join(ROOT, 'src/utils/constants.ts'), 'utf8');
+const pool = fs.readFileSync(path.join(ROOT, 'src/main/sources/fast-http-source-pool.ts'), 'utf8');
+const selectorSource = fs.readFileSync(path.join(ROOT, 'src/main/sources/source-mode-selector.ts'), 'utf8');
+assert.match(engine, /requestedMode === 'FAST'/); assert.match(engine, /name: 'FAST Transport Ready'/);
+assert.match(engine, /const cycleSource = selection\.source/); assert.match(engine, /processFilter\(filter, cycleSource,/);
+assert.match(engine, /const concurrency = sourceConcurrency\(cycleSource\)/);
+assert.match(engine, /sourceAdapterOverride = sourceAdapter/);
+assert.match(settings, /data-testid="source-mode-select"/);
+for (const mode of ['AUTO', 'FAST', 'LEGACY']) assert.match(settings, new RegExp(`<option value="${mode}">`));
+assert.match(settings, /value=\{normalizeSourceMode\(config\.monitoring\.sourceMode\)\}/);
+assert.match(settings, /disabled=\{isMonitoring\}/); assert.match(settings, /sourceMode: 'LEGACY'/);
+assert.match(constants, /sourceMode: 'LEGACY'/);
+assert.equal(require(path.join(ROOT, 'resources/default-config.json')).monitoring.sourceMode, 'LEGACY');
+assert.match(engine, /new LegacyBrowserSourceAdapter\(playwrightService\)/);
+assert.match(engine, /new FastHttpSourcePool\(playwrightService\)/);
+assert.match(pool, /readonly maxConcurrentScans = 2/); assert.equal((pool.match(/new FastHttpSourceAdapter/g) || []).length, 1);
+for (const forbidden of ['newContext', 'launch(', 'cookies', 'storageState']) assert.ok(!selectorSource.includes(forbidden));
+assert.ok(!engine.includes('claimTransaction(')); assert.ok(!engine.includes('appendTransactions('));
+assert.ok(!engine.includes('setResumeMarker(null)')); assert.ok(!engine.includes('this.sourceAdapter.scan'));
+console.log('PASS: Phase 10 source mode A-AO (contract, readiness, selector, immutable cycle source, UI, and frozen boundaries).');
