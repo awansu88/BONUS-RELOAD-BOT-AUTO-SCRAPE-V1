@@ -142,7 +142,10 @@ const deferred = () => {
     const source = fs.readFileSync(file, 'utf8');
     return /\.appendTransactions\s*\(/.test(source) && !file.endsWith('google-sheets-service.ts');
   });
-  assert.deepEqual(appendCallers.map(file => path.relative(ROOT, file)), ['src/main/services/pending-export-recovery.ts']);
+  const relativeAppendCallers = appendCallers.map(file =>
+    path.relative(ROOT, file).split(path.sep).join('/')
+  );
+  assert.deepEqual(relativeAppendCallers, ['src/main/services/pending-export-recovery.ts']);
   assert.match(recoverySource, /googleSheetsService\.appendTransactions\(missing\)/);
 
   // S-V: Legacy stays default, FAST stays dormant, and Phase 9 is not started.
