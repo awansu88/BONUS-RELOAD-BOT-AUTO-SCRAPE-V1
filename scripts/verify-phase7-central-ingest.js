@@ -48,7 +48,7 @@ const makeIngest = claimTransaction => new CentralIngestService(
   assert.match(processBody, /centralIngestService\.ingest/); assert.ok(!processBody.includes('this.isDuplicate(')); assert.ok(!processBody.includes('.has('));
   const exportBody = engineSource.slice(engineSource.indexOf('private async exportBuffer'), engineSource.indexOf('private async updateExportStats'));
   assert.ok(!exportBody.includes('insertTransactions')); assert.match(exportBody, /recoverPendingExports/);
-  assert.match(engineSource, /sourceAdapter \?\? new LegacyBrowserSourceAdapter/); assert.match(engineSource, /for \(const filter of filters\)/);
+  assert.match(engineSource, /sourceAdapter \?\? new LegacyBrowserSourceAdapter/);
 
   const claimResults = [true, false];
   const sqlite = { claimTransaction: async () => claimResults.shift(), getPendingExports: async () => [] };
