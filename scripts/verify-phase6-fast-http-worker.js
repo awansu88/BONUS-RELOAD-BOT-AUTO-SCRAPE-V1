@@ -15,23 +15,38 @@ const page1 = fixture('pagination-page-1.html');
 const final = fixture('pagination-final.html');
 
 const profile = overrides => ({ id: 'p', name: 'Fixture', enabled: true, priority: 1, ...overrides });
-const descriptor = overrides => ({ action: '/deposit/transactions?static=kept&_token=remove&csrf=remove', method: 'GET', names: {
-  payment: 'payment_id', status: 'deposit_status', agent: 'agent_name',
-  dateFrom: 'deposit_process_date_from', dateTo: 'deposit_process_date_to',
-}, ...overrides });
-const controls = overrides => ({
-  [SELECTORS.FILTER.DEPOSIT_TYPE]: { tagName: 'SELECT', options: [{ value: '', textContent: 'All' }, { value: '286', textContent: 'Manual Deposit' }] },
-  [SELECTORS.FILTER.DEPOSIT_STATUS]: { tagName: 'SELECT', options: [{ value: 'approved_raw', textContent: 'Approve' }] },
-  [SELECTORS.FILTER.AGENT_INPUT]: { tagName: 'INPUT', getAttribute: name => name === 'type' ? 'text' : null },
-  ...overrides,
-});
 const fakePage = (origin = 'https://example-a.invalid/deposit/transactions?page=9', options = {}) => {
-  const elements = controls(options.controls);
+  const form = { getAttribute: name => name === 'action'
+    ? (options.formAction ?? '/deposit/transactions?static=kept&_token=remove&csrf=remove')
+    : name === 'method' ? (options.formMethod ?? 'GET') : null };
+  const otherForm = { getAttribute: () => null };
+  const names = { payment: 'payment_id', status: 'deposit_status', agent: 'agent_name',
+    dateFrom: 'deposit_process_date_from', dateTo: 'deposit_process_date_to', ...(options.names || {}) };
+  const element = (tagName, name, owningForm, extra = {}) => ({ tagName, ...extra,
+    closest: selector => selector === 'form' ? owningForm : null,
+    getAttribute: attribute => attribute === 'name' ? name : attribute === 'type' && tagName === 'INPUT' ? 'text' : null,
+  });
+  const elements = {
+    ...(!options.omitPayment ? { [SELECTORS.FILTER.DEPOSIT_TYPE]: element('SELECT', names.payment,
+      options.paymentInOtherForm ? otherForm : form, { options: [{ value: '', textContent: 'All' }, { value: '286', textContent: 'Manual Deposit' }] }) } : {}),
+    [SELECTORS.FILTER.DEPOSIT_STATUS]: element('SELECT', names.status, options.missingForm ? null : form,
+      { options: [{ value: 'approved_raw', textContent: 'Approve' }] }),
+    ...(!options.omitAgent ? { [SELECTORS.FILTER.AGENT_INPUT]: element(options.agentSelect ? 'SELECT' : 'INPUT', names.agent,
+      options.agentInOtherForm ? otherForm : form, options.agentSelect ? { options: [{ value: '7', textContent: 'Agent A' }] } : {}) } : {}),
+    [SELECTORS.FILTER.DATE_FROM]: element('INPUT', names.dateFrom, options.missingForm ? null : form),
+    [SELECTORS.FILTER.DATE_TO]: element('INPUT', names.dateTo, options.missingForm ? null : form),
+  };
   return {
     url: () => origin,
     async $eval(selector, callback) { if (!elements[selector]) throw new Error('missing'); return callback(elements[selector]); },
     async inputValue(selector) { return selector === SELECTORS.FILTER.DATE_FROM ? (options.from ?? 'manual-from') : (options.to ?? 'manual-to'); },
-    async evaluate() { return options.descriptor === null ? null : (options.descriptor || descriptor()); },
+    async evaluate(callback, argument) {
+      const previous = global.document;
+      global.document = { querySelector: selector => elements[selector] || null };
+      try { return callback(argument); } finally {
+        if (previous === undefined) delete global.document; else global.document = previous;
+      }
+    },
   };
 };
 const response = (html, url = 'https://example-a.invalid/deposit/transactions', status = 200, wait) => ({
@@ -56,13 +71,13 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   // A-E: session-owned request bridge, dynamic origin/action, same-origin, and GET-only.
   let h = harness(); let result = await h.adapter.scan(request());
   assert.strictEqual(h.stats().requestContextReads, 1); assert.strictEqual(new URL(h.calls[0]).origin, 'https://example-a.invalid');
-  h = harness({ page: fakePage('https://example-b.invalid/deposit/transactions', { descriptor: descriptor({ action: './transactions' }) }),
+  h = harness({ page: fakePage('https://example-b.invalid/deposit/transactions', { formAction: './transactions' }),
     responses: [response(valid, 'https://example-b.invalid/deposit/transactions')] });
   await h.adapter.scan(request()); assert.strictEqual(new URL(h.calls[0]).origin, 'https://example-b.invalid');
   assert.strictEqual(new URL(h.calls[0]).pathname, '/deposit/transactions');
-  h = harness({ page: fakePage(undefined, { descriptor: descriptor({ action: 'https://evil.invalid/deposits' }) }) });
+  h = harness({ page: fakePage(undefined, { formAction: 'https://evil.invalid/deposits' }) });
   await expectPrep(h.adapter, request(), 'REQUEST_ORIGIN_UNSAFE'); assert.strictEqual(h.calls.length, 0);
-  h = harness({ page: fakePage(undefined, { descriptor: descriptor({ method: 'POST' }) }) });
+  h = harness({ page: fakePage(undefined, { formMethod: 'POST' }) });
   await expectPrep(h.adapter, request(), 'REQUEST_METHOD_UNSUPPORTED'); assert.strictEqual(h.calls.length, 0);
 
   // F-L: actual Phase 3 provider/resolver semantics feed exact query values and dates.
@@ -74,9 +89,8 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   let query = new URL(h.calls[0]).searchParams;
   assert.strictEqual(query.get('agent_name'), 'Agent A'); assert.strictEqual(query.get('deposit_status'), 'approved_raw');
   assert.deepStrictEqual([query.get('deposit_process_date_from'), query.get('deposit_process_date_to')], ['manual-from', 'manual-to']);
-  const agentSelect = { tagName: 'SELECT', options: [{ value: '7', textContent: 'Agent A' }] };
   for (const requested of ['7', 'Agent A']) {
-    h = harness({ page: fakePage(undefined, { controls: { [SELECTORS.FILTER.AGENT_INPUT]: agentSelect } }) });
+    h = harness({ page: fakePage(undefined, { agentSelect: true }) });
     await h.adapter.scan(request({ filter: profile({ agent: requested }) }));
     assert.strictEqual(new URL(h.calls[0]).searchParams.get('agent_name'), '7');
   }
@@ -86,13 +100,41 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
 
   // M-N: profile-specific absence is soft; core descriptor failures are hard and pre-start.
   let started = false;
-  h = harness({ page: fakePage(undefined, { controls: { [SELECTORS.FILTER.DEPOSIT_TYPE]: { tagName: 'SELECT', options: [] } } }) });
+  h = harness({ page: fakePage(undefined, { omitPayment: true }) });
   await assert.rejects(h.adapter.scan(request({ filter: profile({ payment: 'missing' }), onScanStart: () => { started = true; } })),
     error => error.isProfileUnavailable === true); assert.strictEqual(started, false); assert.strictEqual(h.calls.length, 0);
-  h = harness({ page: fakePage(undefined, { descriptor: null }) });
+  h = harness({ page: fakePage(undefined, { missingForm: true }) });
   await expectPrep(h.adapter, request({ onScanStart: () => { started = true; } }), 'REQUEST_FORM_MISSING'); assert.strictEqual(h.calls.length, 0);
-  h = harness({ page: fakePage(undefined, { descriptor: descriptor({ names: { ...descriptor().names, status: '' } }) }) });
+  h = harness({ page: fakePage(undefined, { names: { status: '' } }) });
   await expectPrep(h.adapter, request(), 'REQUEST_PARAMETER_MISSING'); assert.strictEqual(h.calls.length, 0);
+  for (const field of ['dateFrom', 'dateTo']) {
+    h = harness({ page: fakePage(undefined, { names: { [field]: '' } }) });
+    await expectPrep(h.adapter, request(), 'REQUEST_PARAMETER_MISSING'); assert.strictEqual(h.calls.length, 0);
+  }
+
+  // Revision 1: optional controls are irrelevant unless the resolved request needs them.
+  h = harness({ page: fakePage(undefined, { omitPayment: true, omitAgent: true }) });
+  await h.adapter.scan(request()); query = new URL(h.calls[0]).searchParams;
+  assert.strictEqual(query.has('payment_id'), false); assert.strictEqual(query.has('agent_name'), false);
+  h = harness({ page: fakePage(undefined, { paymentInOtherForm: true, agentInOtherForm: true }) });
+  await h.adapter.scan(request()); assert.strictEqual(h.calls.length, 1);
+
+  // Semantic absence is soft, but missing required transport shape after resolution is hard.
+  h = harness({ page: fakePage(undefined, { omitPayment: true }) });
+  await assert.rejects(h.adapter.scan(request({ filter: profile({ payment: '286' }) })), error => error.isProfileUnavailable === true);
+  assert.strictEqual(h.calls.length, 0);
+  for (const pageOptions of [{ names: { payment: '' } }, { paymentInOtherForm: true }]) {
+    h = harness({ page: fakePage(undefined, pageOptions) });
+    await assert.rejects(h.adapter.scan(request({ filter: profile({ payment: '286' }) })),
+      error => error instanceof DepositRequestPreparationError && error.isProfileUnavailable !== true);
+    assert.strictEqual(h.calls.length, 0);
+  }
+  for (const pageOptions of [{ names: { agent: '' } }, { agentInOtherForm: true }]) {
+    h = harness({ page: fakePage(undefined, pageOptions) });
+    await assert.rejects(h.adapter.scan(request({ filter: profile({ agent: 'Agent A' }) })),
+      error => error instanceof DepositRequestPreparationError && error.isProfileUnavailable !== true);
+    assert.strictEqual(h.calls.length, 0);
+  }
 
   // O-P: real parser returns exact rows and trusts a semantic empty table.
   h = harness(); result = await h.adapter.scan(request());
@@ -188,6 +230,9 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
     /localStorage|sessionStorage/, /console\.|getLogger/, /selectOption\s*\(|\.fill\s*\(|\.click\s*\(/]) assert.doesNotMatch(phase6, forbidden);
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   for (const dependency of ['axios', 'node-fetch', 'got', 'undici', 'request', 'superagent']) assert.ok(!pkg.dependencies[dependency]);
+  const playwrightService = fs.readFileSync(path.join(ROOT, 'src/main/services/playwright-service.ts'), 'utf8');
+  assert.match(playwrightService, /getRequestContext\(\): APIRequestContext \| null \{ return this\.context\?\.request \?\? null; \}/);
+  assert.doesNotMatch(playwrightService, /getRequestContext[\s\S]{0,160}cookies\s*\(/);
 
   console.log('PASS: Phase 6 FAST HTTP worker cases A-AQ, shared-auth, trust, concurrency, and security guards.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -79,7 +79,10 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       throw error;
     }
 
-    const descriptor = await new DepositRequestRuntimeProvider(page).readDescriptor();
+    const descriptor = await new DepositRequestRuntimeProvider(page).readDescriptor({
+      requirePayment: resolved.payment !== undefined,
+      requireAgent: resolved.agent !== undefined,
+    });
     const firstUrl = this.firstRequestUrl(browserUrl, descriptor, resolved);
     request.onScanStart?.();
 
