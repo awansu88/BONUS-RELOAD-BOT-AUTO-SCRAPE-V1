@@ -259,3 +259,23 @@ The worker permits one scan and one request at a time. Pagination is strictly se
 with no prefetch, retry, Legacy fallback, credential recovery, or second session. Manual
 re-login remains operator-owned. FAST is not default-wired: `MonitoringEngine` continues
 to construct `LegacyBrowserSourceAdapter`; there is no UI mode selector or source config.
+
+## V2 Phase 7 — Central Ingest / Atomic Deduplication
+
+Phase 7 moves authoritative acceptance behind `CentralIngestService`: real essential-field
+validation, the production fingerprint generator, construction of an unchanged `Transaction`
+with `exportStatus='pending'`, and one atomic SQLite fingerprint claim. `ACCEPTED` therefore
+means the row is already durable. A uniqueness conflict returns `DUPLICATE`; validation
+failure returns `REJECTED`; every other SQLite error propagates.
+
+The V1 schema and fingerprint contract are unchanged. The new claim uses `INSERT ... ON
+CONFLICT(transaction_fingerprint) DO NOTHING`, so the first writer's payload, filter, and
+pending/exported/failed status cannot be overwritten or reset. In-memory fingerprint sets
+remain advisory for duplicate-page scan optimization and statistics, but are updated only
+after SQLite decides ingest and cannot authorize a new transaction.
+
+The engine's volatile buffer now tracks accepted rows and triggers export; it is not a
+durability boundary. `exportBuffer()` clears that tracker and delegates pending work to the
+unchanged `PendingExportRecovery`, without inserting rows a second time. The filter loop
+remains sequential, Legacy remains the default source, and FAST remains dormant. Phase 7
+adds no export queue, concurrency, fallback, retry redesign, schema, dependency, or UI work.

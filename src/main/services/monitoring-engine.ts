@@ -13,6 +13,7 @@ import { AppConfig } from '../../types/config';
 import { PendingExportRecovery, PendingRecoveryResult } from './pending-export-recovery';
 import type { SourceAdapter } from '../sources/source-adapter';
 import { LegacyBrowserSourceAdapter } from '../sources/legacy-browser-source-adapter';
+import { CentralIngestService } from './central-ingest-service';
 
 export class MonitoringEngine {
   private state: MonitoringState = 'IDLE';
@@ -23,6 +24,7 @@ export class MonitoringEngine {
   private buffer: Transaction[] = [];
   private pendingExportRecovery: PendingExportRecovery;
   private sourceAdapter: SourceAdapter;
+  private centralIngestService: CentralIngestService;
   /**
    * Resume Marker — short KEY_ID (8-char upper-case fingerprint) of the
    * newest transaction confirmed as exported to Google Sheets. Persisted
@@ -85,6 +87,7 @@ export class MonitoringEngine {
     sourceAdapter?: SourceAdapter,
   ) {
     this.sourceAdapter = sourceAdapter ?? new LegacyBrowserSourceAdapter(playwrightService);
+    this.centralIngestService = new CentralIngestService(validator, fingerprintGen, sqliteService);
     this.pendingExportRecovery = new PendingExportRecovery(
       sqliteService,
       googleSheetsService,
@@ -548,13 +551,10 @@ export class MonitoringEngine {
   private async processTransaction(raw: RawTransaction, filter: FilterProfile): Promise<void> {
     this.cycleCounters.parsed++;
     
-    // Essential Field Check — verifies the parser extracted the minimum
-    // set of fields needed to fingerprint and export the row. NO business
-    // filtering happens here; the browser already applied every configured
-    // filter before this row became visible in the deposit table.
     this.setState('VALIDATING');
-    const validation = this.validator.validate(raw);
-    if (!validation.valid) {
+    const result = await this.centralIngestService.ingest(raw, filter.name);
+
+    if (result.status === 'REJECTED') {
       this.cycleCounters.rejected++;
       getLogger().diag(
         [
@@ -569,43 +569,30 @@ export class MonitoringEngine {
           `Amount  : ${raw.amount}`,
           `Process : ${raw.processDate || '(blank)'}`,
           `Result  : REJECTED`,
-          `Reason  : ${validation.errors.join(', ')}`,
+          `Reason  : ${result.errors.join(', ')}`,
           '--------------------------------'
         ].join('\n')
       );
       return;
     }
     this.cycleCounters.validated++;
-    
     getLogger().debug(`Transaction validated: user=${raw.userName} amount=${raw.amount}`);
-    
-    const fingerprint = this.fingerprintGen.generate(raw);
     this.cycleCounters.fingerprintsCreated++;
-    
-    if (this.processedInCycle.has(fingerprint)) {
+
+    if (result.status === 'DUPLICATE') {
+      this.processedInCycle.add(result.fingerprint);
+      this.cachedFingerprints.add(result.fingerprint);
+      getLogger().debug(`SQLite-confirmed duplicate: ${result.fingerprint.slice(0, 12)}…`);
       this.cycleCounters.duplicates++;
       return;
     }
-    
-    this.setState('CHECKING_DUPLICATES');
-    if (this.isDuplicate(fingerprint)) {
-      getLogger().debug(`Duplicate detected: ${fingerprint.slice(0, 12)}…`);
-      this.cycleCounters.duplicates++;
-      return;
-    }
-    
+
     this.setState('BUFFERING');
-    const transaction: Transaction = {
-      ...raw,
-      transactionFingerprint: fingerprint,
-      filterProfile: filter.name,
-      exportStatus: 'pending'
-    };
-    
-    this.buffer.push(transaction);
-    this.bufferFingerprints.add(fingerprint);
-    this.processedInCycle.add(fingerprint);
-    this.cachedFingerprints.add(fingerprint);
+    this.buffer.push(result.transaction);
+    this.bufferFingerprints.add(result.fingerprint);
+    this.processedInCycle.add(result.fingerprint);
+    this.cachedFingerprints.add(result.fingerprint);
+    this.cycleCounters.sqliteInserted++;
     this.cycleCounters.buffered++;
     this.exportStats.newTransactions++;
     
@@ -622,38 +609,13 @@ export class MonitoringEngine {
   }
   
   /**
-   * Export the current buffer using a write-ahead pattern:
-   *   1. Persist ALL buffered rows to SQLite as `pending` first.
-   *   2. Hand durable pending work to the single recovery owner.
-   *   3. That owner reconciles KEY_IDs, appends only missing rows, marks
-   *      SQLite exported, and advances the marker.
-   *
-   * This shrinks the data-loss window to zero for anything that reaches the
-   * buffer, without changing the export batching or duplicate-detection
-   * strategy (SQLite fingerprints + in-memory buffer set — unchanged).
+   * Clear the volatile accepted-row tracker, then hand already-durable
+   * pending work to the existing single recovery owner.
    */
   private async exportBuffer(): Promise<void> {
     if (this.buffer.length === 0) return;
     
     this.setState('EXPORTING');
-    const logger = getLogger();
-    const count = this.buffer.length;
-    const batch = this.buffer;
-    
-    // Step 1: SQLite write-ahead persistence.
-    logger.info(`[STAGE] SQLite write-ahead persist: attempting ${count} row(s)…`);
-    try {
-      await this.sqliteService.insertTransactions(batch);
-      this.cycleCounters.sqliteInserted += count;
-      logger.info(`[STAGE] SQLite write-ahead persist: SUCCESS (${count} row(s) inserted as 'pending')`);
-    } catch (persistErr: any) {
-      logger.error('[STAGE] failure=LOCAL_PERSISTENCE — SQLite write-ahead persist failed; Sheets was not called and the candidate is not durable');
-      throw persistErr;
-    }
-
-    // The candidates are durable now. Clear volatile buffering before the
-    // recovery owner reads SQLite; failed remote/local finalization leaves
-    // the database rows pending for a later cycle or restart.
     this.buffer = [];
     this.bufferFingerprints.clear();
     const result = await this.recoverPendingExports();

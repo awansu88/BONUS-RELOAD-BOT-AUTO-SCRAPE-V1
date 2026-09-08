@@ -80,6 +80,33 @@ export class SQLiteService {
     insertMany(transactions);
     getLogger().info(`Inserted ${transactions.length} transactions`);
   }
+
+  /**
+   * Atomically claims a fingerprint for one transaction. The UNIQUE
+   * constraint is the dedupe authority; conflicts preserve the first row.
+   */
+  async claimTransaction(transaction: Transaction): Promise<boolean> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const result = this.db.prepare(`
+      INSERT INTO transactions (
+        transaction_fingerprint, user_id, account_number, amount,
+        process_date, filter_profile, export_status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(transaction_fingerprint) DO NOTHING
+    `).run(
+      transaction.transactionFingerprint,
+      transaction.userName,
+      transaction.accountNumber,
+      transaction.amount,
+      transaction.processDate,
+      transaction.filterProfile,
+      transaction.exportStatus,
+      formatDateTime(new Date())
+    );
+
+    return result.changes === 1;
+  }
   
   async updateExportStatus(fingerprints: string[], status: 'pending' | 'exported' | 'failed'): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');

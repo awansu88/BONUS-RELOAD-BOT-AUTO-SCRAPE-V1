@@ -33,7 +33,9 @@
     "clean": "rimraf dist dist-build",
     "test:phase4:html-parser": "npm run build:main && node scripts/verify-phase4-html-parser.js",
     "test:phase5:parser-parity": "npm run build:main && node scripts/verify-phase5-parser-parity.js",
-    "test:phase6:fast-http": "npm run build:main && node scripts/verify-phase6-fast-http-worker.js"
+    "test:phase6:fast-http": "npm run build:main && node scripts/verify-phase6-fast-http-worker.js",
+    "test:phase7:ingest": "npm run build:main && node scripts/verify-phase7-central-ingest.js",
+    "test:phase7:sqlite": "npm run build:main && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/verify-phase7-sqlite-atomic-ingest.js"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
