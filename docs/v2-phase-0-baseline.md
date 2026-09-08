@@ -343,3 +343,19 @@ dependency, authentication, performance optimization, or production-hardening be
 ## Phase 11 — Performance optimization
 
 Phase 11 removes avoidable hot-path work without changing business behavior: FAST filter runtime state is captured in one read-only browser evaluation; atomic transaction claims reuse one prepared `ON CONFLICT(transaction_fingerprint) DO NOTHING` statement per database connection; count-only pending-queue paths use a scalar count; and known per-row pipeline details use the existing diagnostic logging gate. Durable recovery still loads ordered pending rows for a real connected drain, and all source, validation, fingerprint, pagination, concurrency, Sheets-writing, and schema contracts remain unchanged.
+
+## V2 Phase 12 — Production hardening
+
+Phase 12 preserves source termination reasons in a transport-neutral cycle error after all
+trusted rows have crossed central ingest and SQLite's atomic claim. The monitoring boundary
+pauses without destroying authenticated browser or recovery state on expired sessions, unsafe
+responses, untrusted FAST preparation, and explicit-FAST runtime prerequisite loss. AUTO
+prerequisite loss and transient transport failures start a fresh cycle after a deterministic
+5/10/20/40/60-second bounded retry ladder; only a completed cycle or manual Start resets it.
+
+Startup initialization now rolls running state back to `ERROR` on failure and permits another
+Start without clearing pending rows, fingerprints, buffer, resume marker, config, or browser
+session. Policy pause remains `PAUSED` until Start or explicit Stop. Source selection stays once
+per cycle, concurrency stays FAST=2/Legacy=1, profile-unavailable stays soft, and Sheets recovery
+remains owned by `PendingExportRecovery` through the single `ExportWriterQueue`. Phase 12 adds
+no fallback, login automation, browser recreation, schema, dependency, migration, or UI change.
