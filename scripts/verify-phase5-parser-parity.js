@@ -152,6 +152,10 @@ function compareRejections(name, legacy, raw, expected) {
 
   // T + production-freeze/security/wiring guards.
   const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+  const canonicalSource = source => source.replace(/\r\n/g, '\n');
+  const canonicalHash = source => crypto.createHash('sha256').update(canonicalSource(source), 'utf8').digest('hex');
+  assert.strictEqual(canonicalHash('a\nb\n'), canonicalHash('a\r\nb\r\n'), 'canonical hashes must ignore checkout line endings');
+  assert.notStrictEqual(canonicalHash('const x = 1;\n'), canonicalHash('const x = 2;\n'), 'canonical hashes must detect source changes');
   assert(/import \{[\s\S]*DEPOSIT_TABLE_LAYOUTS[\s\S]*\} from ['"]\.\.\/sources\/deposit-table-layouts['"]/.test(read('src/main/services/html-mapper.ts')));
   const frozenHashes = {
     'src/main/services/html-mapper.ts':'78f501d07670699bc6b2baf1ef48906373174cc1e93dae412cb436485b209842',
@@ -159,7 +163,7 @@ function compareRejections(name, legacy, raw, expected) {
     'src/main/sources/deposit-table-layouts.ts':'c09445148f94d71e3ed987379a1bbd338a38d164512b585153202a40a8a65dd2',
     'src/main/services/fingerprint-generator.ts':'542274169d8cdf17521ecef287c58b7a926b019b9627ebd21b6eaa7da42e0a9a'
   };
-  for (const [file, expected] of Object.entries(frozenHashes)) assert.strictEqual(crypto.createHash('sha256').update(read(file)).digest('hex'), expected, `${file} changed from Phase 4`);
+  for (const [file, expected] of Object.entries(frozenHashes)) assert.strictEqual(canonicalHash(read(file)), expected, `${file} changed from Phase 4`);
   for (const file of ['src/main/services/monitoring-engine.ts','src/main/sources/legacy-browser-source-adapter.ts']) assert(!read(file).includes('RawHttpHtmlParser'), `${file} must not wire RawHttpHtmlParser`);
   assert(!fs.readdirSync(path.join(root, 'src/main/sources')).some(name => /fast.*source-adapter/i.test(name)), 'no FAST SourceAdapter');
   const production = Object.keys(frozenHashes).map(read).join('\n');
