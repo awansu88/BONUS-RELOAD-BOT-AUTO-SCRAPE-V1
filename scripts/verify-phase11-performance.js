@@ -76,6 +76,16 @@ function recoverySqlite(rows, metrics) {
   }
   const missing = evaluatePage({ ...elements, [SELECTORS.FILTER.AGENT_INPUT]: undefined });
   assert.strictEqual((await new PlaywrightFilterRuntimeProvider(missing.page).readSnapshot()).agent.kind, 'UNAVAILABLE');
+  const failedCalls = { evaluate:0, $eval:0, inputValue:0 };
+  const failedSnapshot = await new PlaywrightFilterRuntimeProvider({
+    async evaluate(){ failedCalls.evaluate++; throw new Error('execution context destroyed'); },
+    async $eval(){ failedCalls.$eval++; }, async inputValue(){ failedCalls.inputValue++; },
+  }).readSnapshot();
+  assert.deepStrictEqual(failedSnapshot, {
+    payment:{ kind:'UNAVAILABLE' }, status:{ kind:'UNAVAILABLE' }, agent:{ kind:'UNAVAILABLE' },
+    dateFrom:{ available:false, value:'' }, dateTo:{ available:false, value:'' },
+  });
+  assert.deepStrictEqual(failedCalls, { evaluate:1, $eval:0, inputValue:0 });
 
   // K-Q: one prepared claim statement per connection lifecycle, N runs, conflict result unchanged.
   const sqlite = new SQLiteService({ getDatabasePath(){ return ':memory:'; } });

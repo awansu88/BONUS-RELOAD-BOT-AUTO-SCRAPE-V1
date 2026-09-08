@@ -119,6 +119,19 @@ const rejectsCode = (fn, code, field) => {
   const missingPage = evaluatedPage(missingElements);
   assert.strictEqual((await new PlaywrightFilterRuntimeProvider(missingPage).readSnapshot()).payment.kind, 'UNAVAILABLE');
 
+  // A failed single browser snapshot retains the old deterministic unavailable semantics.
+  const failedCalls = { evaluate: 0, $eval: 0, inputValue: 0 };
+  const failedSnapshot = await new PlaywrightFilterRuntimeProvider({
+    async evaluate() { failedCalls.evaluate++; throw new Error('execution context destroyed'); },
+    async $eval() { failedCalls.$eval++; },
+    async inputValue() { failedCalls.inputValue++; },
+  }).readSnapshot();
+  assert.deepStrictEqual(failedSnapshot, {
+    payment: { kind: 'UNAVAILABLE' }, status: { kind: 'UNAVAILABLE' }, agent: { kind: 'UNAVAILABLE' },
+    dateFrom: { available: false, value: '' }, dateTo: { available: false, value: '' },
+  });
+  assert.deepStrictEqual(failedCalls, { evaluate: 1, $eval: 0, inputValue: 0 });
+
   // Y: a placeholder's blank raw value can never satisfy an explicit restriction.
   rejectsCode(() => resolve({ depositType: 'All' }, {
     payment: select([['', 'All']]),

@@ -13,7 +13,8 @@ export class PlaywrightFilterRuntimeProvider implements FilterRuntimeProvider {
   constructor(private readonly page: FilterRuntimePage) {}
 
   async readSnapshot(): Promise<FilterRuntimeSnapshot> {
-    return this.page.evaluate((selectors): FilterRuntimeSnapshot => {
+    try {
+      return await this.page.evaluate((selectors): FilterRuntimeSnapshot => {
       const readControl = (selector: string): FilterControl => {
         const element = document.querySelector(selector);
         if (!element) return { kind: 'UNAVAILABLE' };
@@ -59,6 +60,15 @@ export class PlaywrightFilterRuntimeProvider implements FilterRuntimeProvider {
       agent: SELECTORS.FILTER.AGENT_INPUT,
       dateFrom: SELECTORS.FILTER.DATE_FROM,
       dateTo: SELECTORS.FILTER.DATE_TO,
-    });
+      });
+    } catch {
+      return {
+        payment: { kind: 'UNAVAILABLE' },
+        status: { kind: 'UNAVAILABLE' },
+        agent: { kind: 'UNAVAILABLE' },
+        dateFrom: { available: false, value: '' },
+        dateTo: { available: false, value: '' },
+      };
+    }
   }
 }

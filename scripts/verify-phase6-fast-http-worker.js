@@ -7,6 +7,7 @@ const ROOT = path.resolve(__dirname, '..');
 const DIST = path.join(ROOT, 'dist/main/main/sources');
 const { FastHttpSourceAdapter, FastWorkerBusyError } = require(path.join(DIST, 'fast-http-source-adapter.js'));
 const { DepositRequestPreparationError } = require(path.join(DIST, 'deposit-request-runtime-provider.js'));
+const { FilterResolutionError } = require(path.join(DIST, 'filter-request-resolver.js'));
 const { SELECTORS } = require(path.join(ROOT, 'dist/main/utils/selector-repository.js'));
 const fixture = name => fs.readFileSync(path.join(__dirname, 'fixtures/phase4', name), 'utf8');
 const valid = fixture('layout-17h-15b.html');
@@ -122,6 +123,20 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   // Semantic absence is soft, but missing required transport shape after resolution is hard.
   h = harness({ page: fakePage(undefined, { omitPayment: true }) });
   await assert.rejects(h.adapter.scan(request({ filter: profile({ payment: '286' }) })), error => error.isProfileUnavailable === true);
+  assert.strictEqual(h.calls.length, 0);
+  const failedSnapshotCalls = { evaluate: 0, $eval: 0, inputValue: 0 };
+  const failedSnapshotPage = {
+    ...fakePage(),
+    async evaluate() { failedSnapshotCalls.evaluate++; throw new Error('execution context destroyed'); },
+    async $eval() { failedSnapshotCalls.$eval++; },
+    async inputValue() { failedSnapshotCalls.inputValue++; },
+  };
+  h = harness({ page: failedSnapshotPage });
+  await assert.rejects(h.adapter.scan(request({ filter: profile({ payment: '286' }) })), error =>
+    error instanceof FilterResolutionError && error.code === 'RUNTIME_CONTROL_UNAVAILABLE'
+      && error.field === 'payment' && error.isProfileUnavailable === true
+      && error.message !== 'execution context destroyed');
+  assert.deepStrictEqual(failedSnapshotCalls, { evaluate: 1, $eval: 0, inputValue: 0 });
   assert.strictEqual(h.calls.length, 0);
   for (const pageOptions of [{ names: { payment: '' } }, { paymentInOtherForm: true }]) {
     h = harness({ page: fakePage(undefined, pageOptions) });
