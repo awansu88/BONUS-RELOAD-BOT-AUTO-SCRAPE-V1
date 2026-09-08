@@ -279,3 +279,21 @@ durability boundary. `exportBuffer()` clears that tracker and delegates pending 
 unchanged `PendingExportRecovery`, without inserting rows a second time. The filter loop
 remains sequential, Legacy remains the default source, and FAST remains dormant. Phase 7
 adds no export queue, concurrency, fallback, retry redesign, schema, dependency, or UI work.
+
+## V2 Phase 8 — Single Export Writer Queue
+
+Phase 8 places one in-memory `ExportWriterQueue` in front of the existing
+`PendingExportRecovery`. It serializes drain signals in FIFO order, preserves each signal's
+`force` and `batchSize` options, returns a distinct recovery result to each caller, and repairs
+its Promise tail after a rejection so later signals still run. It stores no transactions and
+adds no retry or ordering policy: SQLite `pending` rows remain the durable queue and the
+existing recovery service remains the sole Google Sheets writer and backoff owner.
+
+`MonitoringEngine` constructs exactly one recovery service and wraps that same instance in
+exactly one writer queue. Startup forced recovery, cycle-start recovery, `exportBuffer()`, and
+the public recovery lifecycle hook all enqueue through it. The accepted-row buffer remains
+volatile and is cleared without a second SQLite insert.
+
+The production source remains Legacy, FAST remains dormant, and the filter loop remains
+sequential. Phase 8 adds no worker pool, filter concurrency, schema, dependency, source,
+fallback, fingerprint, Sheets-row, resume-marker, shutdown, or UI change.
