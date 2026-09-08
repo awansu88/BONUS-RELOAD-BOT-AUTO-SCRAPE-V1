@@ -32,7 +32,8 @@
     "dist:portable": "npm run build && npm run prepack:portable && electron-builder --win portable --x64 && npm run portable:summary",
     "clean": "rimraf dist dist-build",
     "test:phase4:html-parser": "npm run build:main && node scripts/verify-phase4-html-parser.js",
-    "test:phase5:parser-parity": "npm run build:main && node scripts/verify-phase5-parser-parity.js"
+    "test:phase5:parser-parity": "npm run build:main && node scripts/verify-phase5-parser-parity.js",
+    "test:phase6:fast-http": "npm run build:main && node scripts/verify-phase6-fast-http-worker.js"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",

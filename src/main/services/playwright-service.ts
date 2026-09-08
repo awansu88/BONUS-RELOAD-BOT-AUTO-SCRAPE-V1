@@ -1,4 +1,4 @@
-import { chromium, BrowserContext, Page } from 'playwright';
+import { chromium, APIRequestContext, BrowserContext, Page } from 'playwright';
 import { AppDirectoryManager } from './app-directory-manager';
 import { getLogger } from './logger-service';
 import { SELECTORS } from '../../utils/selector-repository';
@@ -119,6 +119,8 @@ export class PlaywrightService {
   }
   
   getPage(): Page | null { return this.page; }
+  /** Shared-auth HTTP bridge. The persistent visible context remains session owner. */
+  getRequestContext(): APIRequestContext | null { return this.context?.request ?? null; }
   isReady(): boolean { return this.page !== null && this.context !== null; }
   
   /**

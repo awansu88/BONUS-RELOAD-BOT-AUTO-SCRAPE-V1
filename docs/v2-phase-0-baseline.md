@@ -240,3 +240,22 @@ Two differences are accepted and named rather than normalized away:
 2. **Raw stricter page trust — `INTENTIONAL_RAW_STRICTER_DIVERGENCE`.** Raw requires a minimal semantic deposit-header signature and classifies a page with unrelated labels as `UNKNOWN_LAYOUT`, even though Legacy may parse its recognized header/body shape. Raw's malformed whole-page classification is likewise stricter while retaining valid diagnostic transactions. This is intentional fail-closed safety hardening, not a parity regression.
 
 The shim implements only the `$$`, `$$eval`, element `$$`, `textContent`, and `evaluate` operations actually consumed by `HTMLMapper`; it launches no browser and performs no network operation. Phase 5 changes no production parser, layout, fingerprint, source, persistence, Sheets, session, or UI behavior and does not introduce a FAST source or HTTP execution.
+
+## Phase 6 — FAST HTTP Worker, Concurrency = 1
+
+Phase 6 adds a dormant acquisition path: Manual Login → persistent `BrowserContext` →
+shared `BrowserContext.request` → read-only runtime GET descriptor → `RawHttpHtmlParser`
+→ `SourceScanResult`. The visible Chromium context remains the sole session owner; no
+cookie, token, header, or storage credential is copied or persisted.
+
+The adapter resolves filter values with the Phase 3 runtime provider and resolver, and
+reads the containing form's action, GET method, and control names without changing the
+page. Origins come from the current browser URL. Form actions, final redirects, and exact
+parser-provided pagination links must remain same-origin. Only trusted deposit-table
+classifications contribute rows; session expiry and unsafe/HTTP failures are
+machine-readable, with already trusted earlier pages retained.
+
+The worker permits one scan and one request at a time. Pagination is strictly sequential,
+with no prefetch, retry, Legacy fallback, credential recovery, or second session. Manual
+re-login remains operator-owned. FAST is not default-wired: `MonitoringEngine` continues
+to construct `LegacyBrowserSourceAdapter`; there is no UI mode selector or source config.
