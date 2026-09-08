@@ -134,9 +134,9 @@ export class MonitoringEngine {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     this.cachedFingerprints = await this.sqliteService.loadFingerprints(thirtyDaysAgo);
     
-    const pending = await this.sqliteService.getPendingExports();
-    if (pending.length > 0) {
-      logger.info(`Found ${pending.length} durable pending export(s) in SQLite`);
+    const pendingCount = await this.sqliteService.getPendingExportCount();
+    if (pendingCount > 0) {
+      logger.info(`Found ${pendingCount} durable pending export(s) in SQLite`);
     }
     
     // Load the Resume Marker from SQLite. Cross-check with Google Sheets
@@ -157,10 +157,10 @@ export class MonitoringEngine {
     this.exportStats.googleSheetsConnected = this.googleSheetsService.isConnected();
     this.exportStats.manualDateMode = this.config?.features.manualDateMode !== false;
     this.exportStats.initialSyncMode = this.config?.features.initialSyncMode === true;
-    this.exportStats.retryQueueCount = pending.length;
+    this.exportStats.retryQueueCount = pendingCount;
     if (this.onStatsUpdate) this.onStatsUpdate({ ...this.exportStats });
     
-    logger.success(`Monitoring Engine initialized (fingerprints=${this.cachedFingerprints.size}, stored=${this.exportStats.storedTransactions}, pending=${pending.length})`);
+    logger.success(`Monitoring Engine initialized (fingerprints=${this.cachedFingerprints.size}, stored=${this.exportStats.storedTransactions}, pending=${pendingCount})`);
   }
   
   async validatePreRunChecks(): Promise<PreRunValidation> {
@@ -625,13 +625,13 @@ export class MonitoringEngine {
       return 'REJECTED';
     }
     this.cycleCounters.validated++;
-    getLogger().debug(`Transaction validated: user=${raw.userName} amount=${raw.amount}`);
+    getLogger().diag(`Transaction validated: user=${raw.userName} amount=${raw.amount}`);
     this.cycleCounters.fingerprintsCreated++;
 
     if (result.status === 'DUPLICATE') {
       this.processedInCycle.add(result.fingerprint);
       this.cachedFingerprints.add(result.fingerprint);
-      getLogger().debug(`SQLite-confirmed duplicate: ${result.fingerprint.slice(0, 12)}…`);
+      getLogger().diag(`SQLite-confirmed duplicate: ${result.fingerprint.slice(0, 12)}…`);
       this.cycleCounters.duplicates++;
       return 'DUPLICATE';
     }
@@ -645,7 +645,7 @@ export class MonitoringEngine {
     this.cycleCounters.buffered++;
     this.exportStats.newTransactions++;
     
-    getLogger().info(`Buffered new transaction (buffer size: ${this.buffer.length})`);
+    getLogger().diag(`Buffered new transaction (buffer size: ${this.buffer.length})`);
     
     const batchSize = this.config?.monitoring.batchSize || 1000;
     if (this.buffer.length >= batchSize) {
@@ -679,7 +679,7 @@ export class MonitoringEngine {
   
   private async updateExportStats(): Promise<void> {
     this.exportStats.pendingQueueCount = this.buffer.length;
-    this.exportStats.retryQueueCount = (await this.sqliteService.getPendingExports()).length;
+    this.exportStats.retryQueueCount = await this.sqliteService.getPendingExportCount();
     this.exportStats.successfulExportsToday = await this.sqliteService.getTodayExportCount();
     this.exportStats.storedTransactions = await this.sqliteService.getStoredTransactionCount();
     this.exportStats.loadedFingerprints = this.cachedFingerprints.size;

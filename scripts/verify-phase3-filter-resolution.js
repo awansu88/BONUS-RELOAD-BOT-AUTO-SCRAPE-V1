@@ -85,28 +85,38 @@ const rejectsCode = (fn, code, field) => {
   rejectsCode(() => resolve({}, { status: { kind: 'UNAVAILABLE' } }), 'RUNTIME_CONTROL_UNAVAILABLE');
   rejectsCode(() => resolve({ payment: '286' }, { payment: select([]) }), 'PAYMENT_UNAVAILABLE');
 
-  // X: provider calls only $eval/inputValue, uses central selectors, trims option metadata,
+  // X: provider makes one evaluate call, uses central selectors, trims option metadata,
   // and reports a missing element rather than manufacturing an empty select.
   const calls = [];
   const elements = {
     [SELECTORS.FILTER.DEPOSIT_TYPE]: { tagName: 'SELECT', options: [{ value: ' 286 ', textContent: ' Manual Deposit ' }] },
     [SELECTORS.FILTER.DEPOSIT_STATUS]: { tagName: 'SELECT', options: [{ value: ' Approve ', textContent: ' Approved ' }] },
     [SELECTORS.FILTER.AGENT_INPUT]: { tagName: 'INPUT', getAttribute() { return null; } },
+    [SELECTORS.FILTER.DATE_FROM]: { tagName: 'INPUT', value: 'from' },
+    [SELECTORS.FILTER.DATE_TO]: { tagName: 'INPUT', value: 'to' },
   };
+  const evaluatedPage = elementMap => ({
+    async evaluate(callback, argument) {
+      calls.push(['evaluate']);
+      const previous = global.document;
+      global.document = { querySelector: selector => elementMap[selector] || null };
+      try { return callback(argument); } finally { global.document = previous; }
+    },
+  });
   const fakePage = {
-    async $eval(selector, callback) { calls.push(['$eval', selector]); if (!elements[selector]) throw new Error('missing'); return callback(elements[selector]); },
-    async inputValue(selector) { calls.push(['inputValue', selector]); return selector === SELECTORS.FILTER.DATE_FROM ? 'from' : 'to'; },
+    ...evaluatedPage(elements),
+    async $eval() { calls.push(['$eval']); throw new Error('$eval must not be used'); },
+    async inputValue() { calls.push(['inputValue']); throw new Error('inputValue must not be used'); },
   };
   const snapshot = await new PlaywrightFilterRuntimeProvider(fakePage).readSnapshot();
   assert.deepStrictEqual(snapshot.payment, { kind: 'SELECT', options: [{ value: '286', label: 'Manual Deposit' }] });
   assert.strictEqual(snapshot.agent.kind, 'FREE_TEXT');
   assert.deepStrictEqual(snapshot.dateFrom, { available: true, value: 'from' });
-  assert.ok(calls.every(([method]) => ['$eval', 'inputValue'].includes(method)));
+  assert.deepStrictEqual(calls, [['evaluate']]);
 
-  const missingPage = { ...fakePage, async $eval(selector, callback) {
-    if (selector === SELECTORS.FILTER.DEPOSIT_TYPE) throw new Error('missing');
-    return fakePage.$eval(selector, callback);
-  }};
+  const missingElements = { ...elements };
+  delete missingElements[SELECTORS.FILTER.DEPOSIT_TYPE];
+  const missingPage = evaluatedPage(missingElements);
   assert.strictEqual((await new PlaywrightFilterRuntimeProvider(missingPage).readSnapshot()).payment.kind, 'UNAVAILABLE');
 
   // Y: a placeholder's blank raw value can never satisfy an explicit restriction.
@@ -123,12 +133,8 @@ const rejectsCode = (fn, code, field) => {
 
   // Z: only actual text-entry controls are FREE_TEXT; non-text inputs are unsupported.
   const controlKind = async (tagName, type) => {
-    const controlPage = {
-      async $eval(selector, callback) {
-        return callback({ tagName, getAttribute(name) { return name === 'type' ? type : null; } });
-      },
-      async inputValue() { return 'date'; },
-    };
+    const control = { tagName, getAttribute(name) { return name === 'type' ? type : null; } };
+    const controlPage = evaluatedPage({ ...elements, [SELECTORS.FILTER.AGENT_INPUT]: control });
     return (await new PlaywrightFilterRuntimeProvider(controlPage).readSnapshot()).agent.kind;
   };
   assert.strictEqual(await controlKind('INPUT', null), 'FREE_TEXT');

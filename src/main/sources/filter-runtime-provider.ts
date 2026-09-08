@@ -3,7 +3,7 @@ import { SELECTORS } from '../../utils/selector-repository';
 import { FilterControl, FilterRuntimeSnapshot, RuntimeDateValue } from './filter-request-resolver';
 
 /** A deliberately read-only view of the Playwright operations used here. */
-export type FilterRuntimePage = Pick<Page, '$eval' | 'inputValue'>;
+export type FilterRuntimePage = Pick<Page, 'evaluate'>;
 
 export interface FilterRuntimeProvider {
   readSnapshot(): Promise<FilterRuntimeSnapshot>;
@@ -13,19 +13,10 @@ export class PlaywrightFilterRuntimeProvider implements FilterRuntimeProvider {
   constructor(private readonly page: FilterRuntimePage) {}
 
   async readSnapshot(): Promise<FilterRuntimeSnapshot> {
-    const [payment, status, agent, dateFrom, dateTo] = await Promise.all([
-      this.readControl(SELECTORS.FILTER.DEPOSIT_TYPE),
-      this.readControl(SELECTORS.FILTER.DEPOSIT_STATUS),
-      this.readControl(SELECTORS.FILTER.AGENT_INPUT),
-      this.readDate(SELECTORS.FILTER.DATE_FROM),
-      this.readDate(SELECTORS.FILTER.DATE_TO),
-    ]);
-    return { payment, status, agent, dateFrom, dateTo };
-  }
-
-  private async readControl(selector: string): Promise<FilterControl> {
-    try {
-      return await this.page.$eval(selector, element => {
+    return this.page.evaluate((selectors): FilterRuntimeSnapshot => {
+      const readControl = (selector: string): FilterControl => {
+        const element = document.querySelector(selector);
+        if (!element) return { kind: 'UNAVAILABLE' };
         if (element.tagName.toUpperCase() === 'SELECT') {
           const select = element as HTMLSelectElement;
           return {
@@ -46,17 +37,28 @@ export class PlaywrightFilterRuntimeProvider implements FilterRuntimeProvider {
             : { kind: 'UNAVAILABLE' as const };
         }
         return { kind: 'UNAVAILABLE' as const };
-      });
-    } catch {
-      return { kind: 'UNAVAILABLE' };
-    }
-  }
-
-  private async readDate(selector: string): Promise<RuntimeDateValue> {
-    try {
-      return { available: true, value: await this.page.inputValue(selector) };
-    } catch {
-      return { available: false, value: '' };
-    }
+      };
+      const readDate = (selector: string): RuntimeDateValue => {
+        const element = document.querySelector(selector);
+        const tagName = element?.tagName.toUpperCase();
+        if (!element || !['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName || '') || !('value' in element)) {
+          return { available: false, value: '' };
+        }
+        return { available: true, value: String((element as HTMLInputElement).value) };
+      };
+      return {
+        payment: readControl(selectors.payment),
+        status: readControl(selectors.status),
+        agent: readControl(selectors.agent),
+        dateFrom: readDate(selectors.dateFrom),
+        dateTo: readDate(selectors.dateTo),
+      };
+    }, {
+      payment: SELECTORS.FILTER.DEPOSIT_TYPE,
+      status: SELECTORS.FILTER.DEPOSIT_STATUS,
+      agent: SELECTORS.FILTER.AGENT_INPUT,
+      dateFrom: SELECTORS.FILTER.DATE_FROM,
+      dateTo: SELECTORS.FILTER.DATE_TO,
+    });
   }
 }

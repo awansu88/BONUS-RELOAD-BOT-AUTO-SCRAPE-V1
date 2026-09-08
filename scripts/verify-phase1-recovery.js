@@ -20,6 +20,7 @@ function fixture(initial, remote = []) {
   const calls = { append: 0, marker: 0, mark: 0 };
   const sqlite = {
     getPendingExports: async () => store.rows.filter(t => t.exportStatus === 'pending'),
+    getPendingExportCount: async () => store.rows.filter(t => t.exportStatus === 'pending').length,
     updateExportStatus: async (fps, status) => {
       calls.mark++;
       store.rows.filter(t => fps.includes(t.transactionFingerprint)).forEach(t => t.exportStatus = status);

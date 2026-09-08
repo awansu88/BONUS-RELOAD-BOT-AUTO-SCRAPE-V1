@@ -33,8 +33,8 @@ const fakePage = (origin = 'https://example-a.invalid/deposit/transactions?page=
       { options: [{ value: 'approved_raw', textContent: 'Approve' }] }),
     ...(!options.omitAgent ? { [SELECTORS.FILTER.AGENT_INPUT]: element(options.agentSelect ? 'SELECT' : 'INPUT', names.agent,
       options.agentInOtherForm ? otherForm : form, options.agentSelect ? { options: [{ value: '7', textContent: 'Agent A' }] } : {}) } : {}),
-    [SELECTORS.FILTER.DATE_FROM]: element('INPUT', names.dateFrom, options.missingForm ? null : form),
-    [SELECTORS.FILTER.DATE_TO]: element('INPUT', names.dateTo, options.missingForm ? null : form),
+    [SELECTORS.FILTER.DATE_FROM]: element('INPUT', names.dateFrom, options.missingForm ? null : form, { value: options.from ?? 'manual-from' }),
+    [SELECTORS.FILTER.DATE_TO]: element('INPUT', names.dateTo, options.missingForm ? null : form, { value: options.to ?? 'manual-to' }),
   };
   return {
     url: () => origin,

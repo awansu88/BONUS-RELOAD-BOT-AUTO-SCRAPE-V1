@@ -339,3 +339,7 @@ Concurrency comes only from the selected source (Legacy one, FAST two). Central 
 schema v1 and atomic claim, resume marker, pending export recovery, single export writer, and
 Google Sheets output remain shared and unchanged. Phase 10 adds no retry, failover, schema,
 dependency, authentication, performance optimization, or production-hardening behavior.
+
+## Phase 11 — Performance optimization
+
+Phase 11 removes avoidable hot-path work without changing business behavior: FAST filter runtime state is captured in one read-only browser evaluation; atomic transaction claims reuse one prepared `ON CONFLICT(transaction_fingerprint) DO NOTHING` statement per database connection; count-only pending-queue paths use a scalar count; and known per-row pipeline details use the existing diagnostic logging gate. Durable recovery still loads ordered pending rows for a real connected drain, and all source, validation, fingerprint, pagination, concurrency, Sheets-writing, and schema contracts remain unchanged.
