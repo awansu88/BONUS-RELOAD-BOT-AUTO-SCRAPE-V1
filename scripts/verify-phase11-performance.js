@@ -129,6 +129,23 @@ function recoverySqlite(rows, metrics) {
   recovery = new PendingExportRecovery(recoverySqlite(rows, metrics), { isConnected(){ return true; } }, () => true);
   result = await recovery.recover(); assert.strictEqual(result.skipped, 'STOPPED'); assert.strictEqual(metrics.rowLoads, 0); assert.strictEqual(result.remaining, 1);
 
+  // A stop requested while durable rows load must win before any Sheets or local-finalization work.
+  metrics = { rowLoads:0, counts:0, events:[] }; rows = [txn('5'.repeat(40)), txn('6'.repeat(40))];
+  let stopDuringLoad = false; let stateReadsAfterStop = 0; let appendsAfterStop = 0;
+  const midLoadSqlite = recoverySqlite(rows, metrics);
+  midLoadSqlite.getPendingExports = async () => { metrics.rowLoads++; stopDuringLoad = true; return rows; };
+  const midLoadSheets = {
+    isConnected(){ return true; },
+    async getExportedKeyIdState(){ stateReadsAfterStop++; return { keyIds:new Set(), latestKeyId:null }; },
+    async appendTransactions(){ appendsAfterStop++; },
+  };
+  recovery = new PendingExportRecovery(midLoadSqlite, midLoadSheets, () => stopDuringLoad);
+  result = await recovery.recover();
+  assert.strictEqual(metrics.rowLoads, 1); assert.strictEqual(metrics.counts, 0);
+  assert.strictEqual(stateReadsAfterStop, 0); assert.strictEqual(appendsAfterStop, 0);
+  assert.deepStrictEqual(metrics.events, []);
+  assert.strictEqual(result.skipped, 'STOPPED'); assert.strictEqual(result.remaining, 2); assert.strictEqual(result.pendingFound, 0);
+
   metrics = { rowLoads:0, counts:0, events:[] }; rows = [txn('a1234567'.padEnd(40,'a')), txn('b1234567'.padEnd(40,'b'))]; let stateReads=0;
   const sheets = { isConnected(){ return true; }, async getExportedKeyIdState(){ stateReads++; return { keyIds:new Set(['A1234567']), latestKeyId:'A1234567' }; }, async appendTransactions(items){ metrics.events.push(`append:${items.map(x=>x.transactionFingerprint).join(',')}`); } };
   recovery = new PendingExportRecovery(recoverySqlite(rows, metrics), sheets);

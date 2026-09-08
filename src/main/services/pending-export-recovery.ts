@@ -59,6 +59,7 @@ export class PendingExportRecovery {
       return this.pendingCountResult('SHEETS_UNAVAILABLE');
     }
     const pending = await this.sqliteService.getPendingExports();
+    if (this.shouldStop()) return this.resultWithPending('STOPPED', pending.length);
 
     const result: PendingRecoveryResult = {
       pendingFound: pending.length, alreadyRemote: 0, appended: 0,
