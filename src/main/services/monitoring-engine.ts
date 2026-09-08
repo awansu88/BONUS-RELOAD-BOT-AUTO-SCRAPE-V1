@@ -14,6 +14,7 @@ import { PendingExportRecovery, PendingRecoveryResult } from './pending-export-r
 import type { SourceAdapter } from '../sources/source-adapter';
 import { LegacyBrowserSourceAdapter } from '../sources/legacy-browser-source-adapter';
 import { CentralIngestService } from './central-ingest-service';
+import { ExportDrainOptions, ExportWriterQueue } from './export-writer-queue';
 
 export class MonitoringEngine {
   private state: MonitoringState = 'IDLE';
@@ -23,6 +24,7 @@ export class MonitoringEngine {
   private processedInCycle: Set<string> = new Set();
   private buffer: Transaction[] = [];
   private pendingExportRecovery: PendingExportRecovery;
+  private exportWriterQueue: ExportWriterQueue;
   private sourceAdapter: SourceAdapter;
   private centralIngestService: CentralIngestService;
   /**
@@ -93,6 +95,7 @@ export class MonitoringEngine {
       googleSheetsService,
       () => !this.isRunning,
     );
+    this.exportWriterQueue = new ExportWriterQueue(this.pendingExportRecovery);
   }
   
   setStateChangeCallback(cb: (state: MonitoringState) => void): void {
@@ -652,14 +655,14 @@ export class MonitoringEngine {
   getState(): MonitoringState { return this.state; }
   isMonitoring(): boolean { return this.isRunning; }
 
-  /** Testable/manual lifecycle hook; all callers share the same guarded owner. */
-  async recoverPendingExports(options: { force?: boolean } = {}): Promise<PendingRecoveryResult> {
-    const result = await this.pendingExportRecovery.recover({
+  /** Testable/manual lifecycle hook; all drain requests share one FIFO writer queue. */
+  async recoverPendingExports(options: ExportDrainOptions = {}): Promise<PendingRecoveryResult> {
+    const result = await this.exportWriterQueue.enqueue({
       force: options.force,
-      batchSize: this.config?.monitoring.batchSize || 1000,
+      batchSize: options.batchSize ?? this.config?.monitoring.batchSize ?? 1000,
     });
-    // A null count is intentionally non-authoritative (only the concurrent
-    // RUNNING skip). Every other result carries a fresh SQLite pending count.
+    // Every normal queued invocation carries its own result. A null count is
+    // still tolerated for the recovery owner's defensive RUNNING guard.
     if (result.remaining !== null) this.exportStats.retryQueueCount = result.remaining;
     if (result.reconciled > 0) this.resumeMarker = await this.sqliteService.getResumeMarker();
     return result;
