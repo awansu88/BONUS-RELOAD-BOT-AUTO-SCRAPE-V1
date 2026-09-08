@@ -3,11 +3,17 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
+const DIST = path.join(root, 'dist/main/main');
 const { RawHttpHtmlParser, RawHttpResponseClassification: C, RawHttpParseErrorCode: E } =
-  require('../dist/main/main/sources/raw-http-html-parser');
-const { FingerprintGenerator } = require('../dist/main/main/services/fingerprint-generator');
+  require(path.join(DIST, 'sources/raw-http-html-parser.js'));
+const loggerSvc = require(path.join(DIST, 'services/logger-service.js'));
+loggerSvc.getLogger = () => ({
+  info(){}, warn(){}, error(){}, debug(){}, success(){}, diag(){},
+  isDiagEnabled(){ return false; }
+});
+const { FingerprintGenerator } = require(path.join(DIST, 'services/fingerprint-generator.js'));
 const { DEPOSIT_TABLE_LAYOUTS, OMITTED_COLUMN } =
-  require('../dist/main/main/sources/deposit-table-layouts');
+  require(path.join(DIST, 'sources/deposit-table-layouts.js'));
 const parser = new RawHttpHtmlParser();
 const fixture = name => fs.readFileSync(path.join(__dirname, 'fixtures/phase4', name), 'utf8');
 const parse = name => parser.parse(fixture(name));
