@@ -100,14 +100,15 @@ function fixture(initial, remote = []) {
   await new PendingExportRecovery(f.sqlite, f.sheets).recover({ force: true });
   assert.equal(f.store.rows[0].exportStatus, 'exported'); assert.equal(f.calls.append, 1);
 
-  // H: write-ahead failure is surfaced and Sheets is never invoked.
+  // H: central-ingest persistence failure is surfaced and Sheets is never invoked.
   let sheetsCalls = 0;
-  const engine = new MonitoringEngine({}, {}, {}, {}, {
-    insertTransactions: async () => { throw new Error('fixture local persistence failure'); },
+  const engine = new MonitoringEngine({}, {}, { validate: () => ({ valid: true, errors: [] }) }, { generate: () => tx('12121212').transactionFingerprint }, {
+    claimTransaction: async () => { throw new Error('fixture local persistence failure'); },
   }, { isConnected: () => true, appendTransactions: async () => { sheetsCalls++; } }, {});
   engine.isRunning = true; engine.buffer = [tx('12121212')];
-  await assert.rejects(() => engine.exportBuffer(), /local persistence failure/);
-  assert.equal(sheetsCalls, 0); assert.equal(engine.buffer.length, 1);
+  engine.buffer = [];
+  await assert.rejects(() => engine.processTransaction(tx('12121212'), { name: 'fixture' }), /local persistence failure/);
+  assert.equal(sheetsCalls, 0); assert.equal(engine.buffer.length, 0);
 
   // I: one remote row plus two missing rows is one safe missing-only batch.
   f = fixture([tx('A1A1A1A1', '2026-01-01'), tx('B2B2B2B2', '2026-01-02'), tx('C3C3C3C3', '2026-01-03')], ['A1A1A1A1']);
