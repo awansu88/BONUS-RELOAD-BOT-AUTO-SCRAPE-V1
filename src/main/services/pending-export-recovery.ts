@@ -53,12 +53,13 @@ export class PendingExportRecovery {
   private async drain(batchSize: number): Promise<PendingRecoveryResult> {
     const startedAt = this.now();
     const logger = getLogger();
-    const pending = await this.sqliteService.getPendingExports();
-    if (this.shouldStop()) return this.resultWithPending('STOPPED', pending.length);
+    if (this.shouldStop()) return this.pendingCountResult('STOPPED');
     if (!this.googleSheetsService.isConnected()) {
       logger.info('[PENDING RECOVERY] deferred: Google Sheets unavailable');
-      return this.resultWithPending('SHEETS_UNAVAILABLE', pending.length);
+      return this.pendingCountResult('SHEETS_UNAVAILABLE');
     }
+    const pending = await this.sqliteService.getPendingExports();
+    if (this.shouldStop()) return this.resultWithPending('STOPPED', pending.length);
 
     const result: PendingRecoveryResult = {
       pendingFound: pending.length, alreadyRemote: 0, appended: 0,
@@ -149,7 +150,7 @@ export class PendingExportRecovery {
       }
     }
 
-    result.remaining = (await this.sqliteService.getPendingExports()).length;
+    result.remaining = await this.sqliteService.getPendingExportCount();
     if (!result.failureClass && result.skipped !== 'STOPPED') this.resetBackoff();
     logger.info(
       `[PENDING RECOVERY] complete found=${result.pendingFound}, alreadyRemote=${result.alreadyRemote}, ` +
@@ -176,8 +177,7 @@ export class PendingExportRecovery {
   }
 
   private async pendingCountResult(skipped: PendingRecoveryResult['skipped']): Promise<PendingRecoveryResult> {
-    const pending = await this.sqliteService.getPendingExports();
-    return this.resultWithPending(skipped, pending.length);
+    return this.resultWithPending(skipped, await this.sqliteService.getPendingExportCount());
   }
 
   private resultWithPending(

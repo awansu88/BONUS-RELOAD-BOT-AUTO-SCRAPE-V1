@@ -7,6 +7,8 @@ import { formatDateTime } from '../../utils/date-utils';
 
 export class SQLiteService {
   private db: Database.Database | null = null;
+  private claimTransactionStatement: Database.Statement | null = null;
+  private pendingExportCountStatement: Database.Statement | null = null;
   
   constructor(private appDirManager: AppDirectoryManager) {}
   
@@ -15,6 +17,8 @@ export class SQLiteService {
     const dbPath = this.appDirManager.getDatabasePath();
     logger.info(`Initializing SQLite database at: ${dbPath}`);
     
+    this.claimTransactionStatement = null;
+    this.pendingExportCountStatement = null;
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
     
@@ -88,13 +92,16 @@ export class SQLiteService {
   async claimTransaction(transaction: Transaction): Promise<boolean> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const result = this.db.prepare(`
+    if (!this.claimTransactionStatement) {
+      this.claimTransactionStatement = this.db.prepare(`
       INSERT INTO transactions (
         transaction_fingerprint, user_id, account_number, amount,
         process_date, filter_profile, export_status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(transaction_fingerprint) DO NOTHING
-    `).run(
+    `);
+    }
+    const result = this.claimTransactionStatement.run(
       transaction.transactionFingerprint,
       transaction.userName,
       transaction.accountNumber,
@@ -135,6 +142,17 @@ export class SQLiteService {
     ).all('pending') as any[];
     
     return results.map(r => this.mapToTransaction(r));
+  }
+
+  async getPendingExportCount(): Promise<number> {
+    if (!this.db) throw new Error('Database not initialized');
+    if (!this.pendingExportCountStatement) {
+      this.pendingExportCountStatement = this.db.prepare(
+        "SELECT COUNT(*) AS count FROM transactions WHERE export_status = 'pending'"
+      );
+    }
+    const result = this.pendingExportCountStatement.get() as { count: number };
+    return result.count;
   }
   
   async getTodayExportCount(): Promise<number> {
@@ -217,6 +235,8 @@ export class SQLiteService {
   }
   
   close(): void {
+    this.claimTransactionStatement = null;
+    this.pendingExportCountStatement = null;
     if (this.db) {
       this.db.close();
       this.db = null;

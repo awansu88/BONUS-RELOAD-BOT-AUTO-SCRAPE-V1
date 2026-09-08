@@ -37,7 +37,7 @@ function dependencies(sourceMode, profiles, options = {}) {
   const page = { isClosed: () => false, url: () => 'https://panel.example/deposits' };
   const playwright = options.playwright || { isReady: () => true, validateSession: async () => ({ ok: true }),
     getPage: () => page, getRequestContext: () => null };
-  const sqlite = { claimTransaction: options.claimTransaction || (async () => true), getPendingExports: async () => [],
+  const sqlite = { claimTransaction: options.claimTransaction || (async () => true), getPendingExports: async () => [], getPendingExportCount: async () => 0,
     getTodayExportCount: async () => 0, getStoredTransactionCount: async () => 0, isReady: () => true,
     getResumeMarker: async () => null };
   const sheets = { isConnected: () => true };
@@ -185,7 +185,12 @@ async function exerciseConcurrency(requestedMode, effectiveMode, maxConcurrentSc
   for (const forbidden of ['newContext', 'launch(', 'cookies', 'storageState']) assert.ok(!selectorSource.includes(forbidden));
   assert.ok(!engineSource.includes('claimTransaction(')); assert.ok(!engineSource.includes('appendTransactions('));
   assert.ok(!engineSource.includes('setResumeMarker(null)'));
-  const packageDiff = require('child_process').execFileSync('git', ['diff', 'HEAD', '--', 'package.json', 'package-lock.json'], { cwd: ROOT, encoding: 'utf8' });
-  assert.equal(packageDiff, '');
+  const childProcess = require('child_process');
+  const lockDiff = childProcess.execFileSync('git', ['diff', 'HEAD', '--', 'package-lock.json'], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(lockDiff, '');
+  const baselinePackage = JSON.parse(childProcess.execFileSync('git', ['show', 'HEAD:package.json'], { cwd: ROOT, encoding: 'utf8' }));
+  const currentPackage = require(path.join(ROOT, 'package.json'));
+  assert.deepStrictEqual(currentPackage.dependencies, baselinePackage.dependencies);
+  assert.deepStrictEqual(currentPackage.devDependencies, baselinePackage.devDependencies);
   console.log('PASS: Phase 10 source mode A-AO (contract, readiness, selector, immutable cycle source, UI, and frozen boundaries).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

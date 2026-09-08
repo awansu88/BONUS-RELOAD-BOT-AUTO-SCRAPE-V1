@@ -147,7 +147,7 @@ async function main() {
     isReady: () => true,
     initialize: async () => {},
     loadFingerprints: async () => new Set(),
-    getPendingExports: async () => [],
+    getPendingExports: async () => [], getPendingExportCount: async () => 0,
     getLatestProcessDate: async () => null,
     insertTransactions: async (txs) => { sqliteCalls.push({op:'insert', users: txs.map(t=>t.userName)}); },
     updateExportStatus: async (fps, status) => { sqliteCalls.push({op:'updateStatus', status, count: fps.length}); },

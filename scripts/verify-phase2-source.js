@@ -100,7 +100,7 @@ async function adapterFixture(overrides = {}) {
   const engine = new MonitoringEngine(
     {}, {}, { validate(value) { validations++; assert.strictEqual(value, raw); return { valid: true, errors: [] }; } },
     { generate: () => 'FINGERPRINT' },
-    { claimTransaction: async () => true, getPendingExports: async () => [], isReady: () => true },
+    { claimTransaction: async () => true, getPendingExports: async () => [], getPendingExportCount: async () => 0, isReady: () => true },
     { isConnected: () => false }, {}, fakeSource,
   );
   engine.isRunning = true;
@@ -135,7 +135,7 @@ async function adapterFixture(overrides = {}) {
   const fatalEngine = new MonitoringEngine(
     {}, {}, { validate(value) { fatalEvents.push('validated'); assert.strictEqual(value, raw); return { valid: true, errors: [] }; } },
     { generate: () => 'FATAL-FINGERPRINT' },
-    { claimTransaction: async () => true, getPendingExports: async () => [], isReady: () => true },
+    { claimTransaction: async () => true, getPendingExports: async () => [], getPendingExportCount: async () => 0, isReady: () => true },
     { isConnected: () => false }, {}, fatalSource,
   );
   fatalEngine.isRunning = true;

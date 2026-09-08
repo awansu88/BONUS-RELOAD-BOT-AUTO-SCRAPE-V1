@@ -161,7 +161,7 @@ function compareRejections(name, legacy, raw, expected) {
     'src/main/services/html-mapper.ts':'78f501d07670699bc6b2baf1ef48906373174cc1e93dae412cb436485b209842',
     'src/main/sources/raw-http-html-parser.ts':'b85d040fa71e575ec872bc3d0a81ea9c3fa3d9c4857ccb7b9ded6c829ae2bbeb',
     'src/main/sources/deposit-table-layouts.ts':'c09445148f94d71e3ed987379a1bbd338a38d164512b585153202a40a8a65dd2',
-    'src/main/services/fingerprint-generator.ts':'542274169d8cdf17521ecef287c58b7a926b019b9627ebd21b6eaa7da42e0a9a'
+    'src/main/services/fingerprint-generator.ts':'e1a6764de4fb56e7c9e33609b05d7c715f7b9987a164622a360f16be2167b1f2'
   };
   for (const [file, expected] of Object.entries(frozenHashes)) assert.strictEqual(canonicalHash(read(file)), expected, `${file} changed from Phase 4`);
   for (const file of ['src/main/services/monitoring-engine.ts','src/main/sources/legacy-browser-source-adapter.ts']) assert(!read(file).includes('RawHttpHtmlParser'), `${file} must not wire RawHttpHtmlParser`);

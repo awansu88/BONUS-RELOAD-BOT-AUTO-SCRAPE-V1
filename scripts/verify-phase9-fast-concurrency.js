@@ -26,7 +26,7 @@ function makeEngine(source, profiles, claimTransaction = async () => true) {
   const config = { version: '2', monitoring: { pollingInterval: 2, maxPageScan: 10, retryCount: 0,
     requestTimeout: 1, browserTimeout: 1, batchSize: 1000, maxCache: 100 }, browser: {}, database: {},
     logging: {}, features: { manualDateMode: true, initialSyncMode: false } };
-  const sqlite = { claimTransaction, getPendingExports: async () => [], getTodayExportCount: async () => 0,
+  const sqlite = { claimTransaction, getPendingExports: async () => [], getPendingExportCount: async () => 0, getTodayExportCount: async () => 0,
     getStoredTransactionCount: async () => 0, isReady: () => true, getResumeMarker: async () => null };
   const sheets = { isConnected: () => false };
   const engine = new MonitoringEngine({}, { getEnabledProfiles: () => profiles }, new TransactionValidator(),

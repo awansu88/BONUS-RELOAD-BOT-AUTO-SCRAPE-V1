@@ -20,6 +20,7 @@ function fixture(initial, remote = []) {
   const calls = { append: 0, marker: 0, mark: 0 };
   const sqlite = {
     getPendingExports: async () => store.rows.filter(t => t.exportStatus === 'pending'),
+    getPendingExportCount: async () => store.rows.filter(t => t.exportStatus === 'pending').length,
     updateExportStatus: async (fps, status) => {
       calls.mark++;
       store.rows.filter(t => fps.includes(t.transactionFingerprint)).forEach(t => t.exportStatus = status);
@@ -149,5 +150,16 @@ function fixture(initial, remote = []) {
   assert.equal(f.calls.append, 1); assert.equal(f.store.marker, 'MMMMMMMM');
   assert.ok(f.store.rows.every(row => row.exportStatus === 'exported'));
 
-  console.log('PASS: Phase 1 recovery matrix A-L (reconciliation, failures, guard, batching, durable counts, marker ordering).');
+  // M: stop requested while the durable load completes prevents all remote/finalization work.
+  f = fixture([tx('S1S1S1S1'), tx('S2S2S2S2')]);
+  let stopDuringLoad = false; let rowLoads = 0; let stateReads = 0;
+  const pendingLoad = f.sqlite.getPendingExports;
+  f.sqlite.getPendingExports = async () => { rowLoads++; stopDuringLoad = true; return pendingLoad(); };
+  f.sheets.getExportedKeyIdState = async () => { stateReads++; return { keyIds: new Set(), latestKeyId: null }; };
+  r = await new PendingExportRecovery(f.sqlite, f.sheets, () => stopDuringLoad).recover({ force: true });
+  assert.equal(rowLoads, 1); assert.equal(stateReads, 0); assert.equal(f.calls.append, 0);
+  assert.equal(f.calls.mark, 0); assert.equal(f.calls.marker, 0);
+  assert.equal(r.skipped, 'STOPPED'); assert.equal(r.remaining, 2); assert.equal(r.pendingFound, 0);
+
+  console.log('PASS: Phase 1 recovery matrix A-M (reconciliation, failures, guards, batching, durable counts, marker ordering).');
 })().catch(error => { console.error(error); process.exitCode = 1; });
