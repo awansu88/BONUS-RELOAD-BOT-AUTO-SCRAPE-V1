@@ -16,6 +16,14 @@ import { LegacyBrowserSourceAdapter } from '../sources/legacy-browser-source-ada
 import { CentralIngestService } from './central-ingest-service';
 import { ExportDrainOptions, ExportWriterQueue } from './export-writer-queue';
 
+interface ConcurrentScanCapability { readonly maxConcurrentScans: number; }
+type TransactionOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED';
+
+function sourceConcurrency(source: SourceAdapter): number {
+  const advertised = (source as SourceAdapter & Partial<ConcurrentScanCapability>).maxConcurrentScans;
+  return advertised === 2 ? 2 : 1;
+}
+
 export class MonitoringEngine {
   private state: MonitoringState = 'IDLE';
   private isRunning: boolean = false;
@@ -353,7 +361,7 @@ export class MonitoringEngine {
     // per-filter catch below when applyFilter() throws a soft
     // `isProfileUnavailable` error. Never triggers a fallback; used only
     // for the operator-facing status log and the dashboard status card.
-    const unavailableProfileNames: string[] = [];
+    const unavailableByIndex: Array<string | undefined> = new Array(filters.length);
     let appliedProfileCount = 0;
     
     // Every polling cycle always starts from Page 1 (iter-9 directive).
@@ -369,31 +377,44 @@ export class MonitoringEngine {
       getLogger().info('Incremental monitoring — scan stops at the first page where every row is already in SQLite.');
     }
     
-    for (const filter of filters) {
-      if (!this.isRunning) break;
-      
-      try {
-        await this.processFilter(filter);
-        appliedProfileCount++;
-      } catch (error: any) {
-        if (error && error.isProfileUnavailable) {
-          // Profile-availability skip: NOT a cycle error. Record it,
-          // emit the operator-facing status, and continue with the
-          // next enabled profile. Never fall back to "All", the
-          // browser default, or the first available option.
-          unavailableProfileNames.push(filter.name);
-          getLogger().warn(
-            `[FILTER PROFILE] ${filter.name} — NOT AVAILABLE, SKIPPED. Continuing with remaining enabled profiles...`
-          );
-          continue;
+    const concurrency = sourceConcurrency(this.sourceAdapter);
+    let nextFilterIndex = 0;
+    let groupAbortRequested = false;
+    let fatalError: any = null;
+    const runWorker = async (): Promise<void> => {
+      while (this.isRunning && !groupAbortRequested) {
+        const index = nextFilterIndex++;
+        if (index >= filters.length) return;
+        const filter = filters[index];
+        try {
+          await this.processFilter(filter, () => groupAbortRequested);
+          appliedProfileCount++;
+        } catch (error: any) {
+          if (error && error.isProfileUnavailable) {
+            unavailableByIndex[index] = filter.name;
+            getLogger().warn(
+              `[FILTER PROFILE] ${filter.name} — NOT AVAILABLE, SKIPPED. Continuing with remaining enabled profiles...`
+            );
+            continue;
+          }
+          // A concurrent acquisition error is cycle-fatal: request peer stop,
+          // settle every already-running filter, and start no queued filter.
+          if (error?.isCycleFatal || concurrency > 1) {
+            groupAbortRequested = true;
+            fatalError ??= error;
+            getLogger().error(`Cycle aborted (fatal): ${filter.name} — ${error?.message || error}`);
+            return;
+          }
+          getLogger().error(`Filter error: ${filter.name}`, error);
         }
-        if (error && error.isCycleFatal) {
-          getLogger().error(`Cycle aborted (fatal): ${filter.name} — ${error.message}`);
-          throw error;
-        }
-        getLogger().error(`Filter error: ${filter.name}`, error);
       }
-    }
+    };
+    const schedulers: Promise<void>[] = [];
+    for (let worker = 0; worker < concurrency; worker++) schedulers.push(runWorker());
+    await Promise.all(schedulers);
+    if (fatalError) throw fatalError;
+
+    const unavailableProfileNames = unavailableByIndex.filter((name): name is string => name !== undefined);
 
     // When every enabled profile in this cycle was unavailable, emit the
     // operator-required "no profile available" status. No fallback is
@@ -462,7 +483,7 @@ export class MonitoringEngine {
     getLogger().success(`Monitoring cycle completed in ${Date.now() - start}ms`);
   }
   
-  private async processFilter(filter: FilterProfile): Promise<void> {
+  private async processFilter(filter: FilterProfile, groupShouldStop: () => boolean = () => false): Promise<void> {
     const filterStartedAt = Date.now();
     // Propagate the manual-date preference from config into the service.
     // Default: true (reliability > automation, per production directive).
@@ -482,19 +503,12 @@ export class MonitoringEngine {
     };
     
     const maxPages = this.config?.monitoring.maxPageScan || 10;
-    // PATCH 12 — capture the `buffered` counter BEFORE processing so we can
-    // report how many rows this filter accepted into the export buffer.
-    // The actual Sheets-append count is reported later in the per-cycle
-    // pipeline audit block; the pagination summary here reports the
-    // downstream-ready count so the operator can immediately verify
-    // "collected pages > 0 → rows accepted > 0" (i.e. nothing was lost).
-    const bufferedBefore = this.cycleCounters.buffered;
     const result = await this.sourceAdapter.scan({
       filter,
       manualDateMode,
       maxPages,
       initialSyncMode,
-      shouldStop: () => !this.isRunning,
+      shouldStop: () => !this.isRunning || groupShouldStop(),
       duplicateCheck,
       // Preserve Legacy lifecycle ordering: source preparation (including
       // filter application) must succeed before the scan state is exposed.
@@ -506,16 +520,16 @@ export class MonitoringEngine {
     // couldn't advance past the actual last page is the exact production
     // bug this patch fixes. `navigationFailure` remains reserved for
     // genuine DOM/browser failures (see PageScanner classification).
+    let bufferedThisFilter = 0;
     for (const raw of result.transactions) {
       if (!this.isRunning) break;
-      await this.processTransaction(raw, filter);
+      if (await this.processTransaction(raw, filter) === 'ACCEPTED') bufferedThisFilter++;
     }
     
     // PATCH 12 — Pagination Summary. Emitted once per filter after every
     // collected row has been handed off to the pipeline, so the operator
     // can distinguish End Of Pagination from a real navigation failure and
     // see exactly how many rows survived to the export buffer.
-    const bufferedThisFilter = this.cycleCounters.buffered - bufferedBefore;
     const parsedThisFilter = result.perPage.reduce((sum, page) => sum + page.rowsParsed, 0);
     const rejectedThisFilter = result.perPage.reduce((sum, page) => sum + page.rowsRejected, 0);
     const duplicateThisFilter = result.perPage.reduce((sum, page) => sum + page.duplicate, 0);
@@ -551,7 +565,7 @@ export class MonitoringEngine {
     }
   }
   
-  private async processTransaction(raw: RawTransaction, filter: FilterProfile): Promise<void> {
+  private async processTransaction(raw: RawTransaction, filter: FilterProfile): Promise<TransactionOutcome> {
     this.cycleCounters.parsed++;
     
     this.setState('VALIDATING');
@@ -576,7 +590,7 @@ export class MonitoringEngine {
           '--------------------------------'
         ].join('\n')
       );
-      return;
+      return 'REJECTED';
     }
     this.cycleCounters.validated++;
     getLogger().debug(`Transaction validated: user=${raw.userName} amount=${raw.amount}`);
@@ -587,7 +601,7 @@ export class MonitoringEngine {
       this.cachedFingerprints.add(result.fingerprint);
       getLogger().debug(`SQLite-confirmed duplicate: ${result.fingerprint.slice(0, 12)}…`);
       this.cycleCounters.duplicates++;
-      return;
+      return 'DUPLICATE';
     }
 
     this.setState('BUFFERING');
@@ -605,6 +619,7 @@ export class MonitoringEngine {
     if (this.buffer.length >= batchSize) {
       await this.exportBuffer();
     }
+    return 'ACCEPTED';
   }
   
   private isDuplicate(fingerprint: string): boolean {

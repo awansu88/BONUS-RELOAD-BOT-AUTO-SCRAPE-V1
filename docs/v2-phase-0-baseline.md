@@ -297,3 +297,26 @@ volatile and is cleared without a second SQLite insert.
 The production source remains Legacy, FAST remains dormant, and the filter loop remains
 sequential. Phase 8 adds no worker pool, filter concurrency, schema, dependency, source,
 fallback, fingerprint, Sheets-row, resume-marker, shutdown, or UI change.
+
+## V2 Phase 9 — Bounded FAST Concurrency = 2
+
+Phase 9 adds a dormant `FastHttpSourcePool` containing exactly two single-active
+`FastHttpSourceAdapter` instances. Both receive the same existing Playwright session owner,
+so both authenticated GET workers use the visible browser's `BrowserContext.request`; the
+pool creates no browser, context, credentials, or request context. A FIFO waiter queue assigns
+at most two scans and lets later requests wait for a worker while each worker's pagination
+remains sequential.
+
+`MonitoringEngine` recognizes only the narrow optional concurrency capability advertised by
+the injected source. It uses a bounded two-runner filter scheduler, indexed unavailable-profile
+accounting, local ingest outcomes for per-filter accepted totals, and cooperative group stop
+composition. A fatal filter first ingests its trusted rows, requests running peers to stop
+between pages, prevents queued filters from starting, waits for started peers to settle, and
+then propagates the fatal error. Soft-unavailable profiles remain isolated.
+
+All rows still cross `CentralIngestService` and SQLite's atomic fingerprint claim. Concurrent
+export signals still contain no row payload and pass through the single FIFO
+`ExportWriterQueue`, leaving `PendingExportRecovery` as the sole Sheets append caller. The
+production constructor still selects Legacy, which advertises no concurrency and therefore
+runs sequentially in original filter order. The FAST pool is not instantiated by production;
+there is no source mode selector, schema/dependency/UI change, or Phase 10 behavior.
