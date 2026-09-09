@@ -215,6 +215,7 @@ export class PlaywrightService {
     const logger = getLogger();
     const label = filter.name || 'unnamed';
     const manualDateMode = options.manualDateMode === true;
+    let resolvedPayment: { value: string; source: 'VALUE' | 'LABEL' } | null = null;
 
     // ==========================================================
     // [FILTER PROFILE] AVAILABILITY GUARD
@@ -231,8 +232,8 @@ export class PlaywrightService {
     // Deposit Type is missing.
     // ==========================================================
     if (filter.depositType) {
-      const available = await this.isDepositTypeAvailable(filter.depositType);
-      if (!available) {
+      resolvedPayment = await this.resolveLegacyDepositTypeValue(filter.depositType);
+      if (!resolvedPayment) {
         logger.warn(
           '\n[FILTER PROFILE]\n' +
           `  Profile : ${label}\n` +
@@ -246,6 +247,12 @@ export class PlaywrightService {
           filter.depositType
         );
       }
+      logger.diag(
+        'Legacy Payment Resolution:\n' +
+        `  requested=${String(filter.depositType).trim()}\n` +
+        `  canonicalValue=${resolvedPayment.value}\n` +
+        `  source=${resolvedPayment.source}`
+      );
       logger.info(
         '\n[FILTER PROFILE]\n' +
         `  Profile : ${label}\n` +
@@ -308,14 +315,11 @@ export class PlaywrightService {
       // Step 2: apply this profile's values.
       if (filter.agent) await this.page.fill(SELECTORS.FILTER.AGENT_INPUT, filter.agent);
       await this.page.selectOption(SELECTORS.FILTER.DEPOSIT_STATUS, 'Approve');
-      if (filter.depositType) {
+      if (resolvedPayment) {
         try {
-          // PATCH 12 — always select by explicit VALUE. `filter.depositType`
-          // holds the option's `value` attribute (e.g. "286") — never the
-          // display label — so we must not let Playwright's default label-
-          // match kick in when a label like "Manual Deposit" would collide
-          // with a different bank listing the same word.
-          await this.page.selectOption(SELECTORS.FILTER.DEPOSIT_TYPE, { value: filter.depositType });
+          // Always select by the canonical explicit VALUE resolved before
+          // reset. Never let Playwright perform label matching here.
+          await this.page.selectOption(SELECTORS.FILTER.DEPOSIT_TYPE, { value: resolvedPayment.value });
         } catch (e: any) {
           // The availability probe above already gated this branch, but
           // the option can theoretically disappear between probe and
@@ -495,20 +499,18 @@ export class PlaywrightService {
   }
 
   /**
-   * Check whether the panel's Deposit Type <select> currently exposes an
-   * option matching `depositType` (by value OR trimmed visible text).
-   *
-   * Runs BEFORE any DOM mutation in applyFilter() and returns a plain
-   * boolean. Never throws for the "option is missing" case — that is a
-   * legitimate production state that this patch is designed to handle
-   * (the panel temporarily removed a payment method). Only unexpected
-   * DOM/query failures are logged and treated as "not available" so no
-   * accidental Search with a wrong Deposit Type can happen.
+   * Resolve a Legacy profile's explicit Deposit Type before any DOM mutation.
+   * Exact raw values take precedence. Otherwise, exactly one distinct,
+   * nonblank raw value with an exact label is accepted. Ambiguous labels,
+   * blank placeholders, and missing choices fail closed. Comparisons are
+   * case-sensitive and trim whitespace only.
    */
-  private async isDepositTypeAvailable(depositType: string): Promise<boolean> {
-    if (!this.page) return false;
-    const target = (depositType || '').trim();
-    if (!target) return true; // no deposit-type restriction on this profile
+  private async resolveLegacyDepositTypeValue(
+    depositType: unknown
+  ): Promise<{ value: string; source: 'VALUE' | 'LABEL' } | null> {
+    if (!this.page) return null;
+    const target = String(depositType ?? '').trim();
+    if (!target) return null;
     try {
       // Wait briefly so we don't race the initial page render; use a short
       // timeout because we already know the deposit table is loaded by the
@@ -518,15 +520,24 @@ export class PlaywrightService {
         `${SELECTORS.FILTER.DEPOSIT_TYPE} option`,
         (nodes) => nodes.map((n) => {
           const el = n as HTMLOptionElement;
-          return { value: el.value || '', text: (el.textContent || '').trim() };
+          return { value: (el.value || '').trim(), label: (el.textContent || '').trim() };
         })
       );
-      return options.some(o => o.value === target || o.text === target);
+      if (options.some(o => o.value === target)) {
+        return { value: target, source: 'VALUE' };
+      }
+      const labelValues = new Set(
+        options.filter(o => o.label === target && o.value !== '').map(o => o.value)
+      );
+      if (labelValues.size === 1) {
+        return { value: labelValues.values().next().value as string, source: 'LABEL' };
+      }
+      return null;
     } catch (e: any) {
       getLogger().warn(
         `Deposit Type availability probe failed for "${target}" — treating as NOT AVAILABLE. ${e?.message || e}`
       );
-      return false;
+      return null;
     }
   }
 
