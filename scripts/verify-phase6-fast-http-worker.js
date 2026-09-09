@@ -78,7 +78,7 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   assert.strictEqual(new URL(h.calls[0]).pathname, '/deposit/transactions');
   h = harness({ page: fakePage(undefined, { formAction: 'https://evil.invalid/deposits' }) });
   await expectPrep(h.adapter, request(), 'REQUEST_ORIGIN_UNSAFE'); assert.strictEqual(h.calls.length, 0);
-  h = harness({ page: fakePage(undefined, { formMethod: 'POST' }) });
+  h = harness({ page: fakePage(undefined, { formMethod: 'PUT' }) });
   await expectPrep(h.adapter, request(), 'REQUEST_METHOD_UNSUPPORTED'); assert.strictEqual(h.calls.length, 0);
 
   // F-L: actual Phase 3 provider/resolver semantics feed exact query values and dates.

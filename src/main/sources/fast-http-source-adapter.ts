@@ -38,6 +38,7 @@ const PROFILE_CODES = new Set([
 const LOGIN_PATH = /\/(login|signin|log-in|sign-in|auth|session|users\/sign_in)(\/|$)/i;
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const AUTH_QUERY = /^(?:_?token|csrf|xsrf|authorization)$/i;
+const TRUSTED_DEPOSIT_PATH = /^\/deposit\/transactions\/?$/;
 
 /** Dormant Phase 6 authenticated GET transport; production still defaults to Legacy. */
 export class FastHttpSourceAdapter implements SourceAdapter {
@@ -156,7 +157,8 @@ export class FastHttpSourceAdapter implements SourceAdapter {
 
   private firstRequestUrl(browserUrl: URL, descriptor: DepositRequestDescriptor,
     resolved: ReturnType<FilterRequestResolver['resolve']>): URL {
-    if (descriptor.method.toUpperCase() !== 'GET')
+    const formMethod = descriptor.method.trim().toUpperCase();
+    if (formMethod !== 'GET' && formMethod !== 'POST')
       throw new DepositRequestPreparationError('REQUEST_METHOD_UNSUPPORTED');
     let target: URL;
     if (!descriptor.action.trim()) {
@@ -169,6 +171,10 @@ export class FastHttpSourceAdapter implements SourceAdapter {
     }
     if (!HTTP_PROTOCOLS.has(target.protocol) || target.origin !== browserUrl.origin)
       throw new DepositRequestPreparationError('REQUEST_ORIGIN_UNSAFE');
+    // POST is form metadata only: FAST may project it to GET solely for this
+    // known read-only search endpoint. The request context remains GET-only.
+    if (formMethod === 'POST' && !TRUSTED_DEPOSIT_PATH.test(target.pathname))
+      throw new DepositRequestPreparationError('REQUEST_URL_INVALID');
     for (const key of [...target.searchParams.keys()]) if (AUTH_QUERY.test(key)) target.searchParams.delete(key);
     if (target.searchParams.has('page')) target.searchParams.set('page', '1');
     const required = [descriptor.names.status, descriptor.names.dateFrom, descriptor.names.dateTo];

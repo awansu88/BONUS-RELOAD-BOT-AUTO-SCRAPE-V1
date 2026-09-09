@@ -41,7 +41,8 @@
     "test:phase10:source-mode": "npm run build:main && node scripts/verify-phase10-source-mode.js",
     "test:phase11:performance": "npm run build:main && node scripts/verify-phase11-performance.js",
     "test:phase12:hardening": "npm run build:main && node scripts/verify-phase12-production-hardening.js",
-    "test:hotfix13a:legacy-payment": "npm run build:main && node scripts/verify-hotfix13a-legacy-payment-canonicalization.js"
+    "test:hotfix13a:legacy-payment": "npm run build:main && node scripts/verify-hotfix13a-legacy-payment-canonicalization.js",
+    "test:hotfix13b:fast-get-projection": "npm run build:main && node scripts/verify-hotfix13b-fast-safe-get-projection.js"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
