@@ -77,7 +77,7 @@ function scannerHarness(duplicateCheck, hasNext = false) {
 }
 
 function fastPage() {
-  const form = { getAttribute: key => key === 'method' ? 'GET' : key === 'action' ? '/deposit/transactions' : null };
+  const form = { formEntries: [], getAttribute: key => key === 'method' ? 'GET' : key === 'action' ? '/deposit/transactions' : null };
   const element = (tagName, name, value, options) => ({ tagName, value, options,
     closest: key => key === 'form' ? form : null,
     getAttribute: key => key === 'name' ? name : key === 'type' ? 'text' : null });
@@ -86,8 +86,8 @@ function fastPage() {
   elements[SELECTORS.FILTER.DATE_FROM] = element('INPUT', 'from', '2026-01-01');
   elements[SELECTORS.FILTER.DATE_TO] = element('INPUT', 'to', '2026-01-01');
   return { url: () => 'https://example.invalid/deposit/transactions', async evaluate(callback, argument) {
-    const previous = global.document; global.document = { querySelector: selector => elements[selector] || null };
-    try { return callback(argument); } finally { if (previous === undefined) delete global.document; else global.document = previous; }
+    const previous = global.document; const previousFormData = global.FormData; global.FormData = class { constructor(form) { this.form = form; } entries() { return (this.form.formEntries || [])[Symbol.iterator](); } }; global.document = { querySelector: selector => elements[selector] || null };
+    try { return callback(argument); } finally { if (previous === undefined) delete global.document; else global.document = previous; global.FormData = previousFormData; }
   }};
 }
 
@@ -211,8 +211,8 @@ function structuralGuards() {
   const scanner = read('src/main/services/page-scanner.ts');
   const legacy = read('src/main/sources/legacy-browser-source-adapter.ts');
   const fast = read('src/main/sources/fast-http-source-adapter.ts');
-  assert.match(fast, /interface FastHttpRequestContext \{ get\(/);
-  assert.doesNotMatch(fast, /http\.(?:post|put|patch|delete|fetch)\s*\(/);
+  assert.match(fast, /get\(url: string\)/); assert.match(fast, /post\(url: string, options:/);
+  assert.doesNotMatch(fast, /http\.(?:put|patch|delete|fetch)\s*\(/);
   assert.match(read('src/main/sources/fast-http-source-pool.ts'), /maxConcurrentScans = 2/);
   assert.match(engine, /return advertised === 2 \? 2 : 1/);
   assert.doesNotMatch(scanner + legacy + fast, /appendTransactions\s*\(/);
