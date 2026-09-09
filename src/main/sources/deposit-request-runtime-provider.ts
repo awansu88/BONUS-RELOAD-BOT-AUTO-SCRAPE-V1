@@ -9,6 +9,10 @@ export interface DepositRequestDescriptor {
 }
 
 export type DepositRequestRuntimePage = Pick<Page, 'evaluate'>;
+export interface BrowserRequestHeadersRuntime {
+  userAgent: string;
+  acceptLanguage?: string;
+}
 export interface DepositRequestDescriptorRequirements {
   requirePayment: boolean;
   requireAgent: boolean;
@@ -61,11 +65,25 @@ export class DepositRequestRuntimeProvider {
     if (!descriptor) throw new DepositRequestPreparationError('REQUEST_FORM_MISSING');
     return descriptor;
   }
+
+  /** Reads non-secret browser metadata used to make an HTTP POST look like the owning page navigation. */
+  async readBrowserRequestHeaders(): Promise<BrowserRequestHeadersRuntime> {
+    const runtime = await this.page.evaluate(() => {
+      const userAgent = navigator.userAgent?.trim() || '';
+      const languages = Array.isArray(navigator.languages)
+        ? navigator.languages.map(value => value?.trim()).filter(Boolean)
+        : [];
+      const fallbackLanguage = navigator.language?.trim() || '';
+      return { userAgent, acceptLanguage: languages.join(',') || fallbackLanguage || undefined };
+    });
+    if (!runtime?.userAgent) throw new DepositRequestPreparationError('REQUEST_BROWSER_METADATA_UNAVAILABLE');
+    return runtime;
+  }
 }
 
 export type DepositRequestPreparationErrorCode =
   | 'REQUEST_FORM_MISSING' | 'REQUEST_PARAMETER_MISSING' | 'REQUEST_METHOD_UNSUPPORTED'
-  | 'REQUEST_URL_INVALID' | 'REQUEST_ORIGIN_UNSAFE';
+  | 'REQUEST_URL_INVALID' | 'REQUEST_ORIGIN_UNSAFE' | 'REQUEST_BROWSER_METADATA_UNAVAILABLE';
 
 export class DepositRequestPreparationError extends Error {
   constructor(public readonly code: DepositRequestPreparationErrorCode) {
