@@ -15,8 +15,17 @@ const empty = read('scripts/fixtures/phase4/empty.html');
 const unknown = read('scripts/fixtures/phase4/unknown-layout.html');
 const login = read('scripts/fixtures/phase4/login.html');
 const TOKEN = 'TEST_CSRF_TOKEN';
+const hotfixFixtures = `${page1}\n${page2}`;
 assert.strictEqual((page1.match(/name="_token" value="([^"]+)"/) || [])[1], TOKEN);
-assert(!/password|authorization|cookie/i.test(page1));
+assert.deepStrictEqual([...page1.matchAll(/name="_token" value="([^"]+)"/g)].map(match => match[1]), [TOKEN]);
+assert(!/https?:\/\//i.test(hotfixFixtures), 'production hostname must be absent from sanitized fixtures');
+assert(!/\b(?:cookie|authorization)\b/i.test(hotfixFixtures), 'credential fixtures are forbidden');
+assert.deepStrictEqual([...hotfixFixtures.matchAll(/<td>(Synthetic User(?: Two)?)<\/td>/g)].map(match => match[1]),
+  ['Synthetic User', 'Synthetic User Two']);
+assert.deepStrictEqual([...hotfixFixtures.matchAll(/data-bank-number="([^"]+)"/g)].map(match => match[1]),
+  ['0000000001', '0000000002']);
+assert.deepStrictEqual([...hotfixFixtures.matchAll(/<td>(Synthetic Agent(?: Two)?)<\/td>/g)].map(match => match[1]),
+  ['Synthetic Agent', 'Synthetic Agent Two']);
 
 const profile = overrides => ({ id: 'p', name: 'Synthetic', enabled: true, priority: 1,
   payment: 'Canonical Payment', status: 'Rejected', agent: 'Resolved Agent', ...overrides });
@@ -128,9 +137,26 @@ const prep = async (h, code, req = request()) => {
   h = harness(); result = await h.adapter.scan(request({ maxPages: 1 }));
   assert.strictEqual(result.terminationReason, 'MAX_SCAN_REACHED'); assert.strictEqual(h.getCalls.length, 0);
 
+  // AI-AJ: production FormData descriptor preparation rejects duplicate names
+  // and non-string/File-like values before either authenticated transport runs.
+  const duplicateSecret = 'DUPLICATE_VALUE_MUST_NOT_LEAK';
+  h = harness({ page: fakePage({ entries: [...baseline, ['payment', duplicateSecret]] }) });
+  await assert.rejects(h.adapter.scan(request()), error =>
+    error instanceof DepositRequestPreparationError && error.code === 'REQUEST_FORM_MISSING'
+      && !error.message.includes(duplicateSecret) && !error.message.includes(TOKEN));
+  assert.strictEqual(h.postCalls.length, 0); assert.strictEqual(h.getCalls.length, 0);
+
+  const fileSecret = 'FILE_VALUE_MUST_NOT_LEAK';
+  const fileLikeValue = { name: fileSecret, toString: () => fileSecret };
+  h = harness({ page: fakePage({ entries: [...baseline, ['attachment', fileLikeValue]] }) });
+  await assert.rejects(h.adapter.scan(request()), error =>
+    error instanceof DepositRequestPreparationError && error.code === 'REQUEST_FORM_MISSING'
+      && !error.message.includes(fileSecret) && !error.message.includes(TOKEN));
+  assert.strictEqual(h.postCalls.length, 0); assert.strictEqual(h.getCalls.length, 0);
+
   // AD-AH: concurrency and prior hotfix contracts are executable via package scripts.
   assert.match(read('src/main/sources/fast-http-source-pool.ts'), /maxConcurrentScans = 2/);
   assert.match(read('src/main/services/monitoring-engine.ts'), /return advertised === 2 \? 2 : 1/);
   assert.doesNotMatch(read('src/main/sources/legacy-browser-source-adapter.ts'), /maxConcurrentScans/);
-  console.log('PASS: Hotfix 13D cases A-AH (live POST transport, payload, response trust, and pagination).');
+  console.log('PASS: Hotfix 13D cases A-AJ (live POST transport, payload, response trust, pagination, and FormData fail-closed behavior).');
 })().catch(error => { console.error(error); process.exitCode = 1; });
