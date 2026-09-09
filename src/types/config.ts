@@ -1,10 +1,12 @@
 import type { SourceMode } from './source-mode';
+import type { ExportStrategy } from './export-strategy';
 
 export interface AppConfig {
   version: string;
   panelUrl?: string;
   monitoring: {
     sourceMode?: SourceMode;
+    exportStrategy?: ExportStrategy;
     pollingInterval: number;
     maxPageScan: number;
     retryCount: number;

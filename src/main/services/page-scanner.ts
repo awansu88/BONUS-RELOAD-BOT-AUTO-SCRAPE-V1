@@ -5,7 +5,7 @@ import { HTMLMapper } from './html-mapper';
 import { SELECTORS } from '../../utils/selector-repository';
 import { getLogger } from './logger-service';
 import { extractPageNumber, urlHasPageMarker } from '../../utils/date-utils';
-import type { PageStats, ScanTerminationReason, SourceScanResult } from '../sources/source-adapter';
+import type { PageStats, ScanTerminationReason, SourcePageBatch, SourceScanResult } from '../sources/source-adapter';
 
 /**
  * Per-page counters that MonitoringEngine uses to render the diagnostic
@@ -72,7 +72,11 @@ export class PageScanner {
    *   after click: verify BOTH URL page and widget active page equal expected
    *   any mismatch → log FAIL block, mark navigationFailure=true, STOP.
    */
-  async scanPages(filter: FilterProfile, maxPages: number = 10): Promise<SourceScanResult> {
+  async scanPages(
+    filter: FilterProfile,
+    maxPages: number = 10,
+    onPage?: (page: SourcePageBatch) => Promise<void>,
+  ): Promise<SourceScanResult> {
     const logger = getLogger();
     const allTransactions: RawTransaction[] = [];
     const perPage: PageStats[] = [];
@@ -179,6 +183,8 @@ export class PageScanner {
       perPage.push(pageStats);
       scanned++;
       lastPageScanned = currentBrowserPage;
+
+      await onPage?.({ pageNumber: currentBrowserPage, transactions: parse.transactions, stats: pageStats });
       
       if (stopByDuplicatePage) {
         terminationReason = 'FULL_DUPLICATE_PAGE';
