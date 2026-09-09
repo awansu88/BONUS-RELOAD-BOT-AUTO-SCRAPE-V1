@@ -352,7 +352,8 @@ export class MonitoringEngine {
         }
       } catch (error) {
         const context = error as { requestedMode?: SourceMode; effectiveMode?: SourceMode; filterName?: string; rowsHandedOff?: number };
-        const decision = this.failurePolicy.decide(error, context);
+        const policyFailure = await this.normalizeRuntimeControlFailure(error);
+        const decision = this.failurePolicy.decide(policyFailure, context);
         const modeFields = `requested=${context.requestedMode || 'UNKNOWN'} effective=${context.effectiveMode || 'UNKNOWN'}`;
         const sourceFields = context.filterName
           ? ` filter=${context.filterName} rowsHandedOff=${context.rowsHandedOff ?? 0}` : '';
@@ -378,6 +379,43 @@ export class MonitoringEngine {
     }
     
     if (this.state !== 'PAUSED') this.setState('IDLE');
+  }
+
+  /**
+   * Runtime filter controls disappear both when the browser session expires and
+   * during recoverable page transitions. Ask the existing session validator to
+   * distinguish those cases without changing the failure policy's global rules.
+   */
+  private async normalizeRuntimeControlFailure(error: unknown): Promise<unknown> {
+    const candidate = error as {
+      terminationReason?: unknown;
+      code?: unknown;
+      requestedMode?: SourceMode;
+      effectiveMode?: SourceMode;
+      filterName?: unknown;
+      rowsHandedOff?: unknown;
+    } | null;
+    const reason = typeof candidate?.terminationReason === 'string'
+      ? candidate.terminationReason
+      : typeof candidate?.code === 'string' ? candidate.code : undefined;
+    if (reason !== 'RUNTIME_CONTROL_UNAVAILABLE') return error;
+
+    try {
+      const session = await this.playwrightService.validateSession();
+      if (session.ok) return error;
+
+      return Object.assign(new Error('Monitoring session is no longer valid.'), {
+        name: 'MonitoringCycleSourceError',
+        isCycleFatal: true,
+        terminationReason: 'SESSION_EXPIRED',
+        requestedMode: candidate?.requestedMode,
+        effectiveMode: candidate?.effectiveMode,
+        filterName: typeof candidate?.filterName === 'string' ? candidate.filterName : undefined,
+        rowsHandedOff: typeof candidate?.rowsHandedOff === 'number' ? candidate.rowsHandedOff : undefined,
+      });
+    } catch {
+      return error;
+    }
   }
   
   private async runMonitoringCycle(): Promise<void> {
