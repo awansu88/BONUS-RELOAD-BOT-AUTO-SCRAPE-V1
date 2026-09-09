@@ -98,7 +98,7 @@ function makeEngine(source, profiles, claimTransaction = async () => true) {
     throw new Error('queued filter unexpectedly started');
   } };
   engine = makeEngine(fatalSource, [profile('Fatal', 1), profile('Sibling', 2), profile('Queued', 3)], async tx => { claimed.push(tx); return true; });
-  await assert.rejects(() => engine.runMonitoringCycle(), /Navigation verification failed/);
+  await assert.rejects(() => engine.runMonitoringCycle(), /Source scan failed \(/);
   assert.deepEqual(fatalStarts, ['Fatal', 'Sibling']); assert.ok(siblingObservedStop); assert.ok(siblingSettled);
   assert.equal(claimed.length, 1); assert.equal(claimed[0].userName, 'Trusted');
 

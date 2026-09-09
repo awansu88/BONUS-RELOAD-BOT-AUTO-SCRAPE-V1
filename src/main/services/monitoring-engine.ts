@@ -18,6 +18,8 @@ import { SourceModeSelector } from '../sources/source-mode-selector';
 import { normalizeSourceMode } from '../../types/source-mode';
 import { CentralIngestService } from './central-ingest-service';
 import { ExportDrainOptions, ExportWriterQueue } from './export-writer-queue';
+import { MonitoringCycleSourceError, MonitoringFailurePolicy } from './monitoring-failure-policy';
+import type { SourceMode } from '../../types/source-mode';
 
 interface ConcurrentScanCapability { readonly maxConcurrentScans: number; }
 type TransactionOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED';
@@ -39,6 +41,8 @@ export class MonitoringEngine {
   private sourceAdapterOverride?: SourceAdapter;
   private sourceModeSelector?: SourceModeSelector;
   private centralIngestService: CentralIngestService;
+  private failurePolicy = new MonitoringFailurePolicy();
+  private pauseReason: string | null = null;
   /**
    * Resume Marker — short KEY_ID (8-char upper-case fingerprint) of the
    * newest transaction confirmed as exported to Google Sheets. Persisted
@@ -236,29 +240,39 @@ export class MonitoringEngine {
     
     this.panelUrl = panelUrl;
     this.isRunning = true;
-    
-    getLogger().info('Starting monitoring...');
-    
-    const googleConfig = await this.configManager.loadGoogleSheetsConfig();
-    if (googleConfig) {
-      await this.googleSheetsService.connect(googleConfig);
-    }
+    this.pauseReason = null;
+    this.failurePolicy.reset();
+
+    try {
+      getLogger().info('Starting monitoring...');
+
+      const googleConfig = await this.configManager.loadGoogleSheetsConfig();
+      if (googleConfig) {
+        await this.googleSheetsService.connect(googleConfig);
+      }
     
     // Resolve the Resume Marker against Google Sheets (production source
     // of truth). Runs AFTER connect() so the Sheets client is ready. Safe
     // to skip when Sheets is unreachable — the SQLite marker (if any)
     // remains authoritative until the next successful export syncs it.
-    await this.resolveResumeMarker();
+      await this.resolveResumeMarker();
 
     // Startup recovery is independent of browser rediscovery and its
     // fingerprint cache. The force option bypasses only cycle backoff.
-    await this.recoverPendingExports({ force: true });
-    
-    this.runMonitoringLoop().catch(error => {
-      getLogger().error('Monitoring loop error', error);
+      await this.recoverPendingExports({ force: true });
+
+      this.runMonitoringLoop().catch(error => {
+        getLogger().error('Monitoring loop error', this.safeError(error));
+        this.isRunning = false;
+        this.setState('ERROR');
+      });
+    } catch (error) {
       this.isRunning = false;
+      this.pauseReason = null;
       this.setState('ERROR');
-    });
+      getLogger().error('Monitoring startup failed', this.safeError(error));
+      throw error;
+    }
   }
   
   /**
@@ -317,12 +331,15 @@ export class MonitoringEngine {
   async stopMonitoring(): Promise<void> {
     getLogger().info('Stopping monitoring...');
     this.isRunning = false;
+    this.pauseReason = null;
+    if (this.state === 'PAUSED') this.setState('IDLE');
   }
   
   private async runMonitoringLoop(): Promise<void> {
     while (this.isRunning) {
       try {
         await this.runMonitoringCycle();
+        this.failurePolicy.reset();
         
         if (this.isRunning) {
           this.setState('SLEEPING');
@@ -330,13 +347,33 @@ export class MonitoringEngine {
           await this.sleep(interval * 1000);
         }
       } catch (error) {
-        getLogger().error('Cycle error', error);
+        const context = error as { requestedMode?: SourceMode; effectiveMode?: SourceMode; filterName?: string; rowsHandedOff?: number };
+        const decision = this.failurePolicy.decide(error, context);
+        const modeFields = `requested=${context.requestedMode || 'UNKNOWN'} effective=${context.effectiveMode || 'UNKNOWN'}`;
+        const sourceFields = context.filterName
+          ? ` filter=${context.filterName} rowsHandedOff=${context.rowsHandedOff ?? 0}` : '';
+        if (decision.action === 'PAUSE') {
+          this.pauseReason = decision.reason;
+          this.isRunning = false;
+          this.setState('PAUSED');
+          getLogger().error(
+            `[MONITORING FAILURE] action=PAUSE reason=${decision.reason} ${modeFields}${sourceFields}. ` +
+            'Fix the condition (login manually if required), then click Start again.',
+            this.safeError(error),
+          );
+          break;
+        }
         this.setState('ERROR');
-        await this.sleep(5000);
+        getLogger().error(
+          `[MONITORING FAILURE] action=RETRY reason=${decision.reason} consecutive=${decision.consecutiveFailures} ` +
+          `retryInMs=${decision.retryInMs} ${modeFields}${sourceFields}`,
+          this.safeError(error),
+        );
+        if (this.isRunning) await this.sleep(decision.retryInMs!);
       }
     }
     
-    this.setState('IDLE');
+    if (this.state !== 'PAUSED') this.setState('IDLE');
   }
   
   private async runMonitoringCycle(): Promise<void> {
@@ -440,7 +477,11 @@ export class MonitoringEngine {
     const schedulers: Promise<void>[] = [];
     for (let worker = 0; worker < concurrency; worker++) schedulers.push(runWorker());
     await Promise.all(schedulers);
-    if (fatalError) throw fatalError;
+    if (fatalError) {
+      fatalError.requestedMode = selection.requestedMode;
+      fatalError.effectiveMode = selection.effectiveMode;
+      throw fatalError;
+    }
 
     const unavailableProfileNames = unavailableByIndex.filter((name): name is string => name !== undefined);
 
@@ -589,11 +630,9 @@ export class MonitoringEngine {
         `Filter "${filter.name}" ended with ${result.terminationReason} — ` +
         `${result.transactions.length} row(s) already handed off to the pipeline before abort.`
       );
-      const err: any = new Error(
-        `Navigation verification failed while scanning "${filter.name}" — aborting cycle`
+      throw new MonitoringCycleSourceError(
+        result.terminationReason, filter.name, result.transactions.length,
       );
-      err.isCycleFatal = true;
-      throw err;
     }
   }
   
@@ -722,5 +761,16 @@ export class MonitoringEngine {
   
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /** Keep operator diagnostics useful without copying arbitrary error payloads or URLs into logs. */
+  private safeError(error: unknown): Error {
+    const value = error as { name?: unknown; code?: unknown; terminationReason?: unknown } | null;
+    const name = typeof value?.name === 'string' ? value.name : 'Error';
+    const reason = typeof value?.terminationReason === 'string' ? value.terminationReason
+      : typeof value?.code === 'string' ? value.code : 'UNKNOWN';
+    const safe = new Error(`${name} (${reason})`);
+    safe.name = name;
+    return safe;
   }
 }

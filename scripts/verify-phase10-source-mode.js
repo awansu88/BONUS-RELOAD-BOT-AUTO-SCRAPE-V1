@@ -164,7 +164,7 @@ async function exerciseConcurrency(requestedMode, effectiveMode, maxConcurrentSc
     fixture = makeEngine('AUTO', [profile('Fatal', 1), profile('Sibling', 2), profile('Queued', 3)],
       { claimTransaction: async tx => { claimed.push(tx); return true; } });
     selectorCalls = installSelection(fixture.engine, 'AUTO', 'FAST', fatalSource);
-    await assert.rejects(() => fixture.engine.runMonitoringCycle(), /Navigation verification failed/);
+    await assert.rejects(() => fixture.engine.runMonitoringCycle(), /Source scan failed \(/);
     assert.equal(selectorCalls(), 1); assert.deepEqual(starts, ['Fatal', 'Sibling']);
     assert.equal(siblingSettled, true); assert.equal(siblingSawStop, true);
     assert.equal(claimed.length, 1); assert.equal(claimed[0].userName, terminationReason);
