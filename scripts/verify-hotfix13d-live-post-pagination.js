@@ -61,10 +61,18 @@ function fakePage({ method = 'POST', action = '/deposit/transactions', entries =
   return { url: () => 'https://safe.invalid/deposit/transactions', unrelatedForm,
     async evaluate(callback, argument) {
       const oldDocument = global.document; const oldFormData = global.FormData;
+      const oldNavigatorDescriptor = Object.getOwnPropertyDescriptor(global, 'navigator');
       global.document = { querySelector(selector) { if (/login|password|change/i.test(selector)) unrelatedInspections++; return elements[selector] || null; } };
       global.FormData = class { constructor(target) { assert.notStrictEqual(target, unrelatedForm); this.target = target; }
         entries() { return this.target.formEntries[Symbol.iterator](); } };
-      try { return callback(argument); } finally { global.document = oldDocument; global.FormData = oldFormData; }
+      Object.defineProperty(global, 'navigator', { configurable: true, value: {
+        userAgent: 'TEST_HOTFIX13D_BROWSER_UA', languages: ['en-US', 'en'], language: 'en-US',
+      } });
+      try { return callback(argument); } finally {
+        global.document = oldDocument; global.FormData = oldFormData;
+        if (oldNavigatorDescriptor) Object.defineProperty(global, 'navigator', oldNavigatorDescriptor);
+        else delete global.navigator;
+      }
     },
     getUnrelatedInspections: () => unrelatedInspections,
   };
