@@ -159,7 +159,7 @@ function compareRejections(name, legacy, raw, expected) {
   assert(/import \{[\s\S]*DEPOSIT_TABLE_LAYOUTS[\s\S]*\} from ['"]\.\.\/sources\/deposit-table-layouts['"]/.test(read('src/main/services/html-mapper.ts')));
   const frozenHashes = {
     'src/main/services/html-mapper.ts':'78f501d07670699bc6b2baf1ef48906373174cc1e93dae412cb436485b209842',
-    'src/main/sources/raw-http-html-parser.ts':'894f691dc66735035b57c36f466df792af61f90ec22544fab9c56a1e7862462b',
+    'src/main/sources/raw-http-html-parser.ts':'a38c495d944d2482dc75eddcb4a0196874f32f4c49717e65398fdece28b6df4c',
     'src/main/sources/deposit-table-layouts.ts':'c09445148f94d71e3ed987379a1bbd338a38d164512b585153202a40a8a65dd2',
     'src/main/services/fingerprint-generator.ts':'e1a6764de4fb56e7c9e33609b05d7c715f7b9987a164622a360f16be2167b1f2'
   };

@@ -23,7 +23,7 @@ assert(!/\b(?:cookie|authorization)\b/i.test(hotfixFixtures), 'credential fixtur
 assert.deepStrictEqual([...hotfixFixtures.matchAll(/<td>(Synthetic User(?: Two)?)<\/td>/g)].map(match => match[1]),
   ['Synthetic User', 'Synthetic User Two']);
 assert.deepStrictEqual([...hotfixFixtures.matchAll(/data-bank-number="([^"]+)"/g)].map(match => match[1]),
-  ['0000000001', '0000000002']);
+  ['TEST_ACCOUNT_001', 'TEST_ACCOUNT_002']);
 assert.deepStrictEqual([...hotfixFixtures.matchAll(/<td>(Synthetic Agent(?: Two)?)<\/td>/g)].map(match => match[1]),
   ['Synthetic Agent', 'Synthetic Agent Two']);
 
