@@ -20,6 +20,7 @@ import { CentralIngestService } from './central-ingest-service';
 import { ExportDrainOptions, ExportWriterQueue } from './export-writer-queue';
 import { MonitoringCycleSourceError, MonitoringFailurePolicy } from './monitoring-failure-policy';
 import type { SourceMode } from '../../types/source-mode';
+import { normalizeExportStrategy } from '../../types/export-strategy';
 
 interface ConcurrentScanCapability { readonly maxConcurrentScans: number; }
 type TransactionOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED';
@@ -245,6 +246,9 @@ export class MonitoringEngine {
 
     try {
       getLogger().info('Starting monitoring...');
+      if (normalizeExportStrategy(this.config?.monitoring.exportStrategy) === 'PER_PAGE') {
+        getLogger().info('[EXPORT STRATEGY] PER_PAGE — durable export drain after each scanned page');
+      }
 
       const googleConfig = await this.configManager.loadGoogleSheetsConfig();
       if (googleConfig) {
@@ -576,6 +580,8 @@ export class MonitoringEngine {
     };
     
     const maxPages = this.config?.monitoring.maxPageScan || 10;
+    const perPage = normalizeExportStrategy(this.config?.monitoring.exportStrategy) === 'PER_PAGE';
+    let bufferedThisFilter = 0;
     const result = await source.scan({
       filter,
       manualDateMode,
@@ -586,6 +592,15 @@ export class MonitoringEngine {
       // Preserve Legacy lifecycle ordering: source preparation (including
       // filter application) must succeed before the scan state is exposed.
       onScanStart: () => this.setState('SCANNING_PAGE'),
+      onPage: perPage ? async page => {
+        let accepted = 0;
+        for (const raw of page.transactions) {
+          if (!this.isRunning) break;
+          if (await this.processTransaction(raw, filter, true) === 'ACCEPTED') accepted++;
+        }
+        bufferedThisFilter += accepted;
+        if (accepted > 0) await this.drainDurablePending();
+      } : undefined,
     });
     
     // PATCH 12 — Process every collected transaction FIRST, regardless of
@@ -593,10 +608,11 @@ export class MonitoringEngine {
     // couldn't advance past the actual last page is the exact production
     // bug this patch fixes. `navigationFailure` remains reserved for
     // genuine DOM/browser failures (see PageScanner classification).
-    let bufferedThisFilter = 0;
-    for (const raw of result.transactions) {
-      if (!this.isRunning) break;
-      if (await this.processTransaction(raw, filter) === 'ACCEPTED') bufferedThisFilter++;
+    if (!perPage) {
+      for (const raw of result.transactions) {
+        if (!this.isRunning) break;
+        if (await this.processTransaction(raw, filter) === 'ACCEPTED') bufferedThisFilter++;
+      }
     }
     
     // PATCH 12 — Pagination Summary. Emitted once per filter after every
@@ -636,7 +652,11 @@ export class MonitoringEngine {
     }
   }
   
-  private async processTransaction(raw: RawTransaction, filter: FilterProfile): Promise<TransactionOutcome> {
+  private async processTransaction(
+    raw: RawTransaction,
+    filter: FilterProfile,
+    suppressBatchTrigger = false,
+  ): Promise<TransactionOutcome> {
     this.cycleCounters.parsed++;
     
     this.setState('VALIDATING');
@@ -687,7 +707,7 @@ export class MonitoringEngine {
     getLogger().diag(`Buffered new transaction (buffer size: ${this.buffer.length})`);
     
     const batchSize = this.config?.monitoring.batchSize || 1000;
-    if (this.buffer.length >= batchSize) {
+    if (!suppressBatchTrigger && this.buffer.length >= batchSize) {
       await this.exportBuffer();
     }
     return 'ACCEPTED';
@@ -703,7 +723,11 @@ export class MonitoringEngine {
    */
   private async exportBuffer(): Promise<void> {
     if (this.buffer.length === 0) return;
-    
+    await this.drainDurablePending();
+  }
+
+  /** Signal the sole durable writer even when another worker cleared the volatile buffer. */
+  private async drainDurablePending(): Promise<void> {
     this.setState('EXPORTING');
     this.buffer = [];
     this.bufferFingerprints.clear();

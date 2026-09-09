@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG } from '../../utils/constants';
 import InfoCard from '../components/InfoCard';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { normalizeSourceMode, SourceMode } from '../../types/source-mode';
+import { ExportStrategy, normalizeExportStrategy } from '../../types/export-strategy';
 
 /**
  * Settings — Iteration 11 layout polish only.
@@ -52,7 +53,7 @@ const SettingsPage: React.FC = () => {
     if (!config) return;
     const next: AppConfig = {
       ...config,
-      monitoring: { ...config.monitoring, sourceMode: 'LEGACY', pollingInterval: 2, maxPageScan: 10, retryCount: 3, batchSize: 1000 },
+      monitoring: { ...config.monitoring, sourceMode: 'LEGACY', exportStrategy: 'BATCHED', pollingInterval: 2, maxPageScan: 10, retryCount: 3, batchSize: 1000 },
       database:   { ...config.database, cleanupDays: 7 },
       features:   { ...config.features, screenshotOnError: false, autoResume: true, autoReconnect: true,
                     diagnosticLogging: false, manualDateMode: true, initialSyncMode: false }
@@ -107,6 +108,22 @@ const SettingsPage: React.FC = () => {
               <option value="FAST">FAST — Force authenticated HTTP acquisition with two workers; prerequisites are required.</option>
               <option value="LEGACY">LEGACY — Existing sequential browser scraper; compatibility / safest mode.</option>
             </select>
+          </div>
+          <div className="col-span-2">
+            <label className="block text-xs text-text-secondary mb-1">Export Strategy</label>
+            <select
+              data-testid="export-strategy-select"
+              value={normalizeExportStrategy(config.monitoring.exportStrategy)}
+              onChange={(e) => setConfig({ ...config, monitoring: { ...config.monitoring, exportStrategy: e.target.value as ExportStrategy } })}
+              disabled={isMonitoring}
+              className="w-full h-9 text-sm"
+            >
+              <option value="BATCHED">BATCHED — Current V2 batching (batch size / cycle boundary).</option>
+              <option value="PER_PAGE">PER_PAGE — Trigger durable export after every successfully scanned page.</option>
+            </select>
+            <p className="text-[11px] text-text-tertiary mt-1">
+              PER_PAGE still persists through SQLite and the safe writer queue; it never exports directly from the scanner.
+            </p>
           </div>
           <div>
             <label className="block text-xs text-text-secondary mb-1">Polling Interval (seconds)</label>

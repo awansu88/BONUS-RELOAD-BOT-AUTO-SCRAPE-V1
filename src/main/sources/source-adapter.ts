@@ -31,6 +31,12 @@ export interface SourceScanResult {
   configuredMaxPage: number;
 }
 
+export interface SourcePageBatch {
+  pageNumber: number;
+  transactions: RawTransaction[];
+  stats: PageStats;
+}
+
 export interface SourceScanRequest {
   filter: FilterProfile;
   manualDateMode: boolean;
@@ -40,6 +46,8 @@ export interface SourceScanRequest {
   duplicateCheck: (raw: RawTransaction) => boolean;
   /** Called after source preparation succeeds, immediately before acquisition starts. */
   onScanStart?: () => void;
+  /** Awaited after a parsed page joins the aggregate and before advancing/stopping. */
+  onPage?: (page: SourcePageBatch) => Promise<void>;
 }
 
 /** Transport-neutral boundary for acquiring raw transaction rows. */

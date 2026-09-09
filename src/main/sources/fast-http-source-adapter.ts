@@ -127,8 +127,10 @@ export class FastHttpSourceAdapter implements SourceAdapter {
         for (const transaction of parsed.transactions) if (request.duplicateCheck(transaction)) duplicate++;
       }
       transactions.push(...parsed.transactions);
-      perPage.push({ pageNumber, rowsDetected: parsed.rowsDetected, rowsParsed: parsed.transactions.length,
-        rowsRejected: parsed.rejections.length, duplicate, buffered: 0, exported: 0 });
+      const stats: PageStats = { pageNumber, rowsDetected: parsed.rowsDetected, rowsParsed: parsed.transactions.length,
+        rowsRejected: parsed.rejections.length, duplicate, buffered: 0, exported: 0 };
+      perPage.push(stats);
+      await request.onPage?.({ pageNumber, transactions: parsed.transactions, stats });
 
       if (!request.initialSyncMode && parsed.transactions.length > 0 && duplicate === parsed.transactions.length)
         return result('FULL_DUPLICATE_PAGE');

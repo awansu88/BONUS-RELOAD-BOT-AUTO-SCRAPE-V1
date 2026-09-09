@@ -2,12 +2,13 @@ import type { Page } from 'playwright';
 import type { RawTransaction } from '../../types/transaction';
 import { PageScanner } from '../services/page-scanner';
 import type { PlaywrightService } from '../services/playwright-service';
-import type { SourceAdapter, SourceScanRequest, SourceScanResult } from './source-adapter';
+import type { SourceAdapter, SourcePageBatch, SourceScanRequest, SourceScanResult } from './source-adapter';
 
 export interface LegacyPageScanner {
   setShouldStop(predicate: () => boolean): void;
   setDuplicateCheck(predicate: ((raw: RawTransaction) => boolean) | null): void;
-  scanPages(filter: SourceScanRequest['filter'], maxPages: number): Promise<SourceScanResult>;
+  scanPages(filter: SourceScanRequest['filter'], maxPages: number,
+    onPage?: (page: SourcePageBatch) => Promise<void>): Promise<SourceScanResult>;
 }
 
 export type LegacyPageScannerFactory = (page: Page) => LegacyPageScanner;
@@ -36,6 +37,6 @@ export class LegacyBrowserSourceAdapter implements SourceAdapter {
     const scanner = this.scannerFactory(page);
     scanner.setShouldStop(request.shouldStop);
     scanner.setDuplicateCheck(request.initialSyncMode ? null : request.duplicateCheck);
-    return scanner.scanPages(request.filter, request.maxPages);
+    return scanner.scanPages(request.filter, request.maxPages, request.onPage);
   }
 }
