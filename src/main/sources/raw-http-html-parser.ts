@@ -90,8 +90,15 @@ export class RawHttpHtmlParser {
         const index = layout.map[key];
         if (index === OMITTED_COLUMN || !cells[index]) return '';
         if (key === 'ACCOUNT_NUMBER') {
-          const canonical = $(cells[index]).attr('data-bank-number');
-          if (canonical && canonical.trim()) return canonical.trim();
+          const accountCell = $(cells[index]);
+          const canonicalValues = [accountCell.attr('data-bank-number'),
+            ...accountCell.find('[data-bank-number]').toArray()
+              .map(element => $(element).attr('data-bank-number'))]
+            .filter((value): value is string => Boolean(value?.trim()))
+            .map(value => value.trim());
+          const uniqueCanonicalValues = [...new Set(canonicalValues)];
+          if (uniqueCanonicalValues.length === 1) return uniqueCanonicalValues[0];
+          if (uniqueCanonicalValues.length > 1) return '';
         }
         return normalizeText($(cells[index]).text());
       };

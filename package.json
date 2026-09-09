@@ -45,7 +45,8 @@
     "test:hotfix13b:fast-get-projection": "npm run build:main && node scripts/verify-hotfix13b-fast-safe-get-projection.js",
     "test:hotfix13c:export-per-page": "npm run build:main && node scripts/verify-hotfix13c-export-per-page.js",
     "test:hotfix13d:live-post-pagination": "npm run build:main && node scripts/verify-hotfix13d-live-post-pagination.js",
-    "test:hotfix13e:navigation-header-parity": "npm run build:main && node scripts/verify-hotfix13e-navigation-header-parity.js"
+    "test:hotfix13e:navigation-header-parity": "npm run build:main && node scripts/verify-hotfix13e-navigation-header-parity.js",
+    "test:hotfix13f:nested-account-number": "npm run build:main && node scripts/verify-hotfix13f-nested-account-number.js"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
