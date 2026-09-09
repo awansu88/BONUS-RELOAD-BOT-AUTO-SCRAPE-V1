@@ -29,6 +29,7 @@ import { CardIcon } from '../components/CardIcons';
 interface FilterProfileLite { id: string; name: string; priority: number; enabled: boolean; }
 
 const stateTone = (state: string, isMonitoring: boolean): { tone: BadgeTone; label: string } => {
+  if (state === 'PAUSED') return { tone: 'warning', label: 'Paused' };
   if (!isMonitoring) return { tone: 'neutral', label: 'Stopped' };
   switch (state) {
     case 'IDLE':                return { tone: 'neutral', label: 'Idle' };
@@ -42,7 +43,6 @@ const stateTone = (state: string, isMonitoring: boolean): { tone: BadgeTone; lab
     case 'BUFFERING':
     case 'EXPORTING':
     case 'UPDATING_CACHE':      return { tone: 'info',    label: 'Processing' };
-    case 'PAUSED':              return { tone: 'warning', label: 'Paused' };
     default:                    return { tone: 'success', label: 'Running' };
   }
 };

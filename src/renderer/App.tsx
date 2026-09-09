@@ -26,11 +26,14 @@ function loadInitialPage(): Page {
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>(loadInitialPage);
-  const { setMonitoringState, setExportStats } = useMonitoringStore();
+  const { setMonitoringState, setIsMonitoring, setExportStats } = useMonitoringStore();
 
   useEffect(() => {
     if (window.electron) {
-      window.electron.onStateChange((state) => setMonitoringState(state as any));
+      window.electron.onStateChange((state) => {
+        setMonitoringState(state as any);
+        if (state === 'PAUSED' || state === 'IDLE') setIsMonitoring(false);
+      });
       window.electron.onStatsUpdate((stats) => setExportStats(stats));
     }
   }, []);
