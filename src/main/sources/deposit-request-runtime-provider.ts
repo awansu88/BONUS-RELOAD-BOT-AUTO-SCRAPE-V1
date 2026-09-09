@@ -5,6 +5,7 @@ export interface DepositRequestDescriptor {
   action: string;
   method: string;
   names: { payment: string; status: string; agent: string; dateFrom: string; dateTo: string };
+  formEntries: Array<[string, string]>;
 }
 
 export type DepositRequestRuntimePage = Pick<Page, 'evaluate'>;
@@ -13,7 +14,7 @@ export interface DepositRequestDescriptorRequirements {
   requireAgent: boolean;
 }
 
-/** Reads transport metadata from the base form and only the requested optional controls. */
+/** Reads transport metadata and successful controls from the one owning search form. */
 export class DepositRequestRuntimeProvider {
   constructor(private readonly page: DepositRequestRuntimePage) {}
 
@@ -35,6 +36,13 @@ export class DepositRequestRuntimeProvider {
       const name = (control: Element | null): string => control?.getAttribute('name')?.trim() || '';
       const optionalName = (control: Element | null): string =>
         control?.closest('form') === form ? name(control) : '';
+      const formEntries: Array<[string, string]> = [];
+      const seen = new Set<string>();
+      for (const [entryName, entryValue] of new FormData(form).entries()) {
+        if (typeof entryValue !== 'string' || seen.has(entryName)) return null;
+        seen.add(entryName);
+        formEntries.push([entryName, entryValue]);
+      }
       return {
         action: form.getAttribute('action') || '',
         method: (form.getAttribute('method') || 'get').trim().toUpperCase(),
@@ -42,6 +50,7 @@ export class DepositRequestRuntimeProvider {
           payment: optionalName(controls.payment), status: name(controls.status), agent: optionalName(controls.agent),
           dateFrom: name(controls.dateFrom), dateTo: name(controls.dateTo),
         },
+        formEntries,
       };
     }, { requirements, selectors: {
       payment: SELECTORS.FILTER.DEPOSIT_TYPE, status: SELECTORS.FILTER.DEPOSIT_STATUS,

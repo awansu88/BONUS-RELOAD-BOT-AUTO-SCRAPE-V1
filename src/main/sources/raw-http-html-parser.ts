@@ -51,7 +51,7 @@ const REQUIRED_HEADER_LABELS = new Set([
 ]);
 
 export class RawHttpHtmlParser {
-  parse(html: string): RawHttpParseResult {
+  parse(html: string, options: { expectedPageNumber?: number } = {}): RawHttpParseResult {
     const $ = load(typeof html === 'string' ? html : '');
     const table = $('table.table.table-striped.b-t').first();
     if (!table.length) return this.withoutTable($);
@@ -120,7 +120,7 @@ export class RawHttpHtmlParser {
     return {
       transactions, rejections, rowsDetected: rows.length,
       layout: { headerCount, bodyCounts, recognized: !unknown, layoutNames: [...layoutNames], headerLabels },
-      pagination: this.pagination($),
+      pagination: this.pagination($, options.expectedPageNumber),
       classification: unknown ? RawHttpResponseClassification.UNKNOWN_LAYOUT
         : malformed ? RawHttpResponseClassification.MALFORMED_DEPOSIT_TABLE
         : transactions.length ? RawHttpResponseClassification.DEPOSIT_TABLE
@@ -145,22 +145,34 @@ export class RawHttpHtmlParser {
       pagination: this.pagination($), classification, pageErrorCode };
   }
 
-  private pagination($: CheerioAPI): RawPaginationInfo {
+  private pagination($: CheerioAPI, expectedPageNumber?: number): RawPaginationInfo {
     const container = $('ul.pagination,nav.pagination,.pagination').first();
     const base: RawPaginationInfo = { currentPage: null, nextPageNumber: null, nextHref: null, hasNext: false, valid: true };
     if (!container.length) return base;
     const active = container.find('.active').first();
-    const currentPage = this.pageNumber(active.attr('data-page') || active.find('a').attr('data-page') || active.text() || active.find('a').attr('href'));
+    const domCurrentPage = active.length
+      ? this.pageNumber(active.attr('data-page') || active.find('a').attr('data-page') || active.text() || active.find('a').attr('href'))
+      : null;
+    if (active.length && domCurrentPage === null)
+      return { ...base, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS };
+    if (domCurrentPage !== null && expectedPageNumber !== undefined && domCurrentPage !== expectedPageNumber)
+      return { ...base, currentPage: domCurrentPage, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS };
+    const currentPage = domCurrentPage ?? expectedPageNumber ?? null;
     base.currentPage = currentPage;
     if (currentPage === null) return { ...base, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS };
     const expected = currentPage + 1;
-    const nextControls = container.find('a[rel="next"],li.next a,a.next').toArray();
-    const explicit = container.find('a').toArray().filter(link => this.pageNumber($(link).attr('data-page') || $(link).attr('href') || $(link).text()) === expected);
-    const candidates = nextControls.length ? nextControls : explicit;
-    if (nextControls.some(link => this.pageNumber($(link).attr('data-page') || $(link).attr('href') || $(link).text()) !== expected))
+    const enabled = container.find('a').toArray().filter(link =>
+      !$(link).closest('.disabled').length && $(link).attr('aria-disabled') !== 'true');
+    const numbered = enabled.map(link => ({ link,
+      page: this.pageNumber($(link).attr('data-page') || $(link).attr('href') || $(link).text()) }))
+      .filter((item): item is { link: typeof enabled[number]; page: number } => item.page !== null);
+    const usable = numbered.filter(item => item.page === expected).map(item => item.link);
+    if (usable.length > 1)
       return { ...base, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS };
-    const usable = candidates.filter(link => !$(link).closest('.disabled').length && $(link).attr('aria-disabled') !== 'true');
-    if (usable.length !== 1) return usable.length > 1 ? { ...base, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS } : base;
+    if (usable.length === 0) {
+      const hasFuture = numbered.some(item => item.page > currentPage);
+      return hasFuture ? { ...base, valid: false, errorCode: RawHttpParseErrorCode.PAGINATION_AMBIGUOUS } : base;
+    }
     const href = $(usable[0]).attr('href');
     if (!href || href === '#') return base;
     return { currentPage, nextPageNumber: expected, nextHref: href, hasNext: true, valid: true };

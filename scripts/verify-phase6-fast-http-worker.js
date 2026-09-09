@@ -17,7 +17,7 @@ const final = fixture('pagination-final.html');
 
 const profile = overrides => ({ id: 'p', name: 'Fixture', enabled: true, priority: 1, ...overrides });
 const fakePage = (origin = 'https://example-a.invalid/deposit/transactions?page=9', options = {}) => {
-  const form = { getAttribute: name => name === 'action'
+  const form = { formEntries: [], getAttribute: name => name === 'action'
     ? (options.formAction ?? '/deposit/transactions?static=kept&_token=remove&csrf=remove')
     : name === 'method' ? (options.formMethod ?? 'GET') : null };
   const otherForm = { getAttribute: () => null };
@@ -43,9 +43,12 @@ const fakePage = (origin = 'https://example-a.invalid/deposit/transactions?page=
     async inputValue(selector) { return selector === SELECTORS.FILTER.DATE_FROM ? (options.from ?? 'manual-from') : (options.to ?? 'manual-to'); },
     async evaluate(callback, argument) {
       const previous = global.document;
+      const previousFormData = global.FormData;
+      global.FormData = class { constructor(form) { this.form = form; }
+        entries() { return (this.form.formEntries || [])[Symbol.iterator](); } };
       global.document = { querySelector: selector => elements[selector] || null };
       try { return callback(argument); } finally {
-        if (previous === undefined) delete global.document; else global.document = previous;
+        if (previous === undefined) delete global.document; else global.document = previous; global.FormData = previousFormData;
       }
     },
   };
@@ -160,9 +163,10 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
 
   // Q-R: exact parser hrefs are followed serially in page order.
   const second = page1
-    .replace('<li class="active"><a href="?page=1">1</a></li><li><a href="?page=2">2</a></li>',
+    .replace('<li class="active"><a href="?page=1">1</a></li>',
       '<li><a href="?page=1">1</a></li><li class="active"><a href="?page=2">2</a></li>')
     .replace('/safe/deposits?page=2', '/nonstandard/exact?page=3')
+    .replace('<li><a href="?page=3">3</a></li>', '')
     .replace('Example User', 'Second User');
   const third = final.replace('Example User', 'Third User').replace('class="active">2', 'class="active">3');
   h = harness({ responses: [response(page1), response(second, 'https://example-a.invalid/safe/deposits?page=2'), response(third, 'https://example-a.invalid/nonstandard/exact?page=3')] });

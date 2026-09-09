@@ -104,6 +104,25 @@ assert.strictEqual(result.pagination.valid, false);
 assert.strictEqual(result.pagination.hasNext, false);
 assert.strictEqual(parse('pagination-page-1.html').pagination.nextPageNumber, 2);
 
+// Hotfix 13D: the caller's expected page safely disambiguates live pagination.
+const live = fs.readFileSync(path.join(__dirname, 'fixtures/hotfix13d/live-post-page1-sanitized.html'), 'utf8');
+result = parser.parse(fixture('pagination-page-1.html'), { expectedPageNumber: 1 });
+assert.strictEqual(result.pagination.nextPageNumber, 2); // active=1 agrees
+result = parser.parse(fixture('pagination-page-1.html'), { expectedPageNumber: 2 });
+assert.strictEqual(result.pagination.valid, false); // active mismatch fails closed
+result = parser.parse(live, { expectedPageNumber: 1 });
+assert.deepStrictEqual({ current: result.pagination.currentPage, next: result.pagination.nextPageNumber,
+  href: result.pagination.nextHref, valid: result.pagination.valid }, {
+  current: 1, next: 2, href: '/deposit/transactions?page=2&_token=TEST_CSRF_TOKEN', valid: true });
+const duplicateAdjacent = live.replace('</ul>', '<li><a href="?page=2">duplicate</a></li></ul>');
+assert.strictEqual(parser.parse(duplicateAdjacent, { expectedPageNumber: 1 }).pagination.valid, false);
+const skipOnly = live.replace(/<li><a rel="next" href="\/deposit\/transactions\?page=2[^<]+<\/a><\/li>/, '');
+assert.strictEqual(parser.parse(skipOnly, { expectedPageNumber: 1 }).pagination.valid, false);
+const disabledAdjacent = live.replace('<li><a rel="next" href="/deposit/transactions?page=2', '<li class="disabled"><a rel="next" href="/deposit/transactions?page=2');
+assert.strictEqual(parser.parse(disabledAdjacent, { expectedPageNumber: 1 }).pagination.hasNext, false);
+assert.strictEqual(parser.parse(disabledAdjacent, { expectedPageNumber: 1 }).pagination.valid, false);
+assert.strictEqual(parser.parse(fixture('empty.html'), { expectedPageNumber: 1 }).pagination.hasNext, false);
+
 // Case AD: Legacy imports this exact shared complete map, eliminating drift.
 const mapper = fs.readFileSync(path.join(root, 'src/main/services/html-mapper.ts'), 'utf8');
 assert(/import \{[\s\S]*DEPOSIT_TABLE_LAYOUTS[\s\S]*\} from ['"]\.\.\/sources\/deposit-table-layouts['"]/.test(mapper));

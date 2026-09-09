@@ -8,7 +8,11 @@ import {
 import { RawHttpHtmlParser, RawHttpResponseClassification as Classification } from './raw-http-html-parser';
 import type { PageStats, ScanTerminationReason, SourceAdapter, SourceScanRequest, SourceScanResult } from './source-adapter';
 
-export interface FastHttpRequestContext { get(url: string): Promise<Pick<APIResponse, 'status' | 'url' | 'text'>>; }
+type FastHttpResponse = Pick<APIResponse, 'status' | 'url' | 'text'>;
+export interface FastHttpRequestContext {
+  get(url: string): Promise<FastHttpResponse>;
+  post(url: string, options: { form: Record<string, string> }): Promise<FastHttpResponse>;
+}
 export interface FastHttpSessionOwner {
   getPage(): Page | null;
   getRequestContext(): APIRequestContext | FastHttpRequestContext | null;
@@ -84,13 +88,13 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       requirePayment: resolved.payment !== undefined,
       requireAgent: resolved.agent !== undefined,
     });
-    const firstUrl = this.firstRequestUrl(browserUrl, descriptor, resolved);
+    const firstRequest = this.prepareFirstRequest(browserUrl, descriptor, resolved);
     request.onScanStart?.();
 
     const transactions: RawTransaction[] = [];
     const perPage: PageStats[] = [];
     let pageNumber = 1;
-    let nextUrl = firstUrl;
+    let nextUrl = firstRequest.url;
     const result = (reason: ScanTerminationReason, failure = false): SourceScanResult => ({
       transactions, perPage, navigationFailure: failure, terminationReason: reason,
       lastPageScanned: perPage.length ? perPage[perPage.length - 1].pageNumber : 0,
@@ -100,8 +104,12 @@ export class FastHttpSourceAdapter implements SourceAdapter {
     if (request.maxPages <= 0) return result('MAX_SCAN_REACHED');
     while (true) {
       if (request.shouldStop()) return result('STOP_REQUESTED');
-      let response: Awaited<ReturnType<FastHttpRequestContext['get']>>;
-      try { response = await http.get(nextUrl.toString()); }
+      let response: FastHttpResponse;
+      try {
+        response = pageNumber === 1 && firstRequest.method === 'POST'
+          ? await http.post(nextUrl.toString(), { form: firstRequest.form! })
+          : await http.get(nextUrl.toString());
+      }
       catch { return result('HTTP_FAILURE', true); }
 
       const status = response.status();
@@ -116,7 +124,7 @@ export class FastHttpSourceAdapter implements SourceAdapter {
         return result('UNSAFE_RESPONSE', true);
 
       let parsed;
-      try { parsed = this.parser.parse(await response.text()); }
+      try { parsed = this.parser.parse(await response.text(), { expectedPageNumber: pageNumber }); }
       catch { return result('UNSAFE_RESPONSE', true); }
       if (parsed.classification === Classification.LOGIN_PAGE) return result('SESSION_EXPIRED', true);
       if (parsed.classification !== Classification.DEPOSIT_TABLE
@@ -157,8 +165,8 @@ export class FastHttpSourceAdapter implements SourceAdapter {
     return url;
   }
 
-  private firstRequestUrl(browserUrl: URL, descriptor: DepositRequestDescriptor,
-    resolved: ReturnType<FilterRequestResolver['resolve']>): URL {
+  private prepareFirstRequest(browserUrl: URL, descriptor: DepositRequestDescriptor,
+    resolved: ReturnType<FilterRequestResolver['resolve']>): { method: 'GET' | 'POST'; url: URL; form?: Record<string, string> } {
     const formMethod = descriptor.method.trim().toUpperCase();
     if (formMethod !== 'GET' && formMethod !== 'POST')
       throw new DepositRequestPreparationError('REQUEST_METHOD_UNSUPPORTED');
@@ -173,25 +181,30 @@ export class FastHttpSourceAdapter implements SourceAdapter {
     }
     if (!HTTP_PROTOCOLS.has(target.protocol) || target.origin !== browserUrl.origin)
       throw new DepositRequestPreparationError('REQUEST_ORIGIN_UNSAFE');
-    // POST is form metadata only: FAST may project it to GET solely for this
-    // known read-only search endpoint. The request context remains GET-only.
     if (formMethod === 'POST' && !TRUSTED_DEPOSIT_PATH.test(target.pathname))
       throw new DepositRequestPreparationError('REQUEST_URL_INVALID');
-    for (const key of [...target.searchParams.keys()]) if (AUTH_QUERY.test(key)) target.searchParams.delete(key);
-    if (target.searchParams.has('page')) target.searchParams.set('page', '1');
     const required = [descriptor.names.status, descriptor.names.dateFrom, descriptor.names.dateTo];
     if (required.some(name => !name)) throw new DepositRequestPreparationError('REQUEST_PARAMETER_MISSING');
-    target.searchParams.set(descriptor.names.status, resolved.status.value);
-    target.searchParams.set(descriptor.names.dateFrom, resolved.dateFrom);
-    target.searchParams.set(descriptor.names.dateTo, resolved.dateTo);
+    const values = formMethod === 'POST' ? Object.fromEntries(descriptor.formEntries) : target.searchParams;
+    const set = (name: string, value: string): void => formMethod === 'POST'
+      ? void ((values as Record<string, string>)[name] = value)
+      : (values as URLSearchParams).set(name, value);
+    set(descriptor.names.status, resolved.status.value);
+    set(descriptor.names.dateFrom, resolved.dateFrom);
+    set(descriptor.names.dateTo, resolved.dateTo);
     if (resolved.payment) {
       if (!descriptor.names.payment) throw new DepositRequestPreparationError('REQUEST_PARAMETER_MISSING');
-      target.searchParams.set(descriptor.names.payment, resolved.payment.value);
+      set(descriptor.names.payment, resolved.payment.value);
     }
     if (resolved.agent) {
       if (!descriptor.names.agent) throw new DepositRequestPreparationError('REQUEST_PARAMETER_MISSING');
-      target.searchParams.set(descriptor.names.agent, resolved.agent.value);
+      set(descriptor.names.agent, resolved.agent.value);
     }
-    return target;
+    if (formMethod === 'GET') {
+      for (const key of [...target.searchParams.keys()]) if (AUTH_QUERY.test(key)) target.searchParams.delete(key);
+      if (target.searchParams.has('page')) target.searchParams.set('page', '1');
+      return { method: 'GET', url: target };
+    }
+    return { method: 'POST', url: target, form: values as Record<string, string> };
   }
 }
