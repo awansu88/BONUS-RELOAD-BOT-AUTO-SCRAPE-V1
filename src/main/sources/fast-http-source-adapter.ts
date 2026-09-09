@@ -7,11 +7,12 @@ import {
 } from './deposit-request-runtime-provider';
 import { RawHttpHtmlParser, RawHttpResponseClassification as Classification } from './raw-http-html-parser';
 import type { PageStats, ScanTerminationReason, SourceAdapter, SourceScanRequest, SourceScanResult } from './source-adapter';
+import { getLogger } from '../services/logger-service';
 
-type FastHttpResponse = Pick<APIResponse, 'status' | 'url' | 'text'>;
+type FastHttpResponse = Pick<APIResponse, 'status' | 'url' | 'text'> & { headers?: () => Record<string, string> };
 export interface FastHttpRequestContext {
   get(url: string): Promise<FastHttpResponse>;
-  post(url: string, options: { form: Record<string, string> }): Promise<FastHttpResponse>;
+  post(url: string, options: { form: Record<string, string>; headers: Record<string, string> }): Promise<FastHttpResponse>;
 }
 export interface FastHttpSessionOwner {
   getPage(): Page | null;
@@ -43,6 +44,7 @@ const LOGIN_PATH = /\/(login|signin|log-in|sign-in|auth|session|users\/sign_in)(
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const AUTH_QUERY = /^(?:_?token|csrf|xsrf|authorization)$/i;
 const TRUSTED_DEPOSIT_PATH = /^\/deposit\/transactions\/?$/;
+const NAVIGATION_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 
 /** Dormant Phase 6 authenticated GET transport; production still defaults to Legacy. */
 export class FastHttpSourceAdapter implements SourceAdapter {
@@ -84,11 +86,15 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       throw error;
     }
 
-    const descriptor = await new DepositRequestRuntimeProvider(page).readDescriptor({
+    const runtimeProvider = new DepositRequestRuntimeProvider(page);
+    const descriptor = await runtimeProvider.readDescriptor({
       requirePayment: resolved.payment !== undefined,
       requireAgent: resolved.agent !== undefined,
     });
     const firstRequest = this.prepareFirstRequest(browserUrl, descriptor, resolved);
+    const postHeaders = firstRequest.method === 'POST'
+      ? this.preparePostHeaders(browserUrl, firstRequest.url, await runtimeProvider.readBrowserRequestHeaders())
+      : undefined;
     request.onScanStart?.();
 
     const transactions: RawTransaction[] = [];
@@ -107,7 +113,7 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       let response: FastHttpResponse;
       try {
         response = pageNumber === 1 && firstRequest.method === 'POST'
-          ? await http.post(nextUrl.toString(), { form: firstRequest.form! })
+          ? await http.post(nextUrl.toString(), { form: firstRequest.form!, headers: postHeaders! })
           : await http.get(nextUrl.toString());
       }
       catch { return result('HTTP_FAILURE', true); }
@@ -126,6 +132,7 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       let parsed;
       try { parsed = this.parser.parse(await response.text(), { expectedPageNumber: pageNumber }); }
       catch { return result('UNSAFE_RESPONSE', true); }
+      if (pageNumber === 1 && firstRequest.method === 'POST') this.logFirstPostResponse(response, finalUrl, parsed);
       if (parsed.classification === Classification.LOGIN_PAGE) return result('SESSION_EXPIRED', true);
       if (parsed.classification !== Classification.DEPOSIT_TABLE
         && parsed.classification !== Classification.EMPTY_DEPOSIT_TABLE) return result('UNSAFE_RESPONSE', true);
@@ -156,6 +163,39 @@ export class FastHttpSourceAdapter implements SourceAdapter {
       nextUrl = candidate;
       pageNumber++;
     }
+  }
+
+  private preparePostHeaders(browserUrl: URL, target: URL,
+    runtime: { userAgent: string; acceptLanguage?: string }): Record<string, string> {
+    if (!runtime.userAgent.trim())
+      throw new DepositRequestPreparationError('REQUEST_BROWSER_METADATA_UNAVAILABLE');
+    if (target.origin !== browserUrl.origin || !TRUSTED_DEPOSIT_PATH.test(target.pathname))
+      throw new DepositRequestPreparationError('REQUEST_ORIGIN_UNSAFE');
+    const headers: Record<string, string> = {
+      Accept: NAVIGATION_ACCEPT,
+      Origin: browserUrl.origin,
+      Referer: `${browserUrl.origin}/deposit/transactions`,
+      'User-Agent': runtime.userAgent,
+      'Cache-Control': 'max-age=0',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-User': '?1',
+    };
+    if (runtime.acceptLanguage) headers['Accept-Language'] = runtime.acceptLanguage;
+    return headers;
+  }
+
+  private logFirstPostResponse(response: FastHttpResponse, finalUrl: URL,
+    parsed: ReturnType<RawHttpHtmlParser['parse']>): void {
+    let contentType = '';
+    try { contentType = response.headers?.()['content-type'] || ''; } catch { /* diagnostic metadata is optional */ }
+    try {
+      getLogger().diag(`FAST first response method=POST status=${response.status()} finalPath=${finalUrl.pathname}`
+        + ` contentType=${contentType} classification=${parsed.classification} headerCount=${parsed.layout.headerCount}`
+        + ` rowsDetected=${parsed.rowsDetected} recognizedLayout=${parsed.layout.recognized}`);
+    } catch { /* logger may not be initialized in isolated adapter tests */ }
   }
 
   private safeBrowserUrl(value: string): URL {

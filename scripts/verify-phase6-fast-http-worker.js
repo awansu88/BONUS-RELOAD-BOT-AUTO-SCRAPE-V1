@@ -247,7 +247,8 @@ const expectPrep = async (adapter, req, code) => assert.rejects(adapter.scan(req
   // Executable security/dependency guards over all Phase 6 production sources.
   const phase6 = fastSource + fs.readFileSync(path.join(ROOT, 'src/main/sources/deposit-request-runtime-provider.ts'), 'utf8');
   for (const forbidden of [/from ['"]axios['"]/, /node-fetch/, /request\.newContext/, /\.cookies\s*\(/,
-    /localStorage|sessionStorage/, /console\.|getLogger/, /selectOption\s*\(|\.fill\s*\(|\.click\s*\(/]) assert.doesNotMatch(phase6, forbidden);
+    /localStorage|sessionStorage/, /console\./, /selectOption\s*\(|\.fill\s*\(|\.click\s*\(/]) assert.doesNotMatch(phase6, forbidden);
+  assert.match(fastSource, /getLogger\(\)\.diag/);
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   for (const dependency of ['axios', 'node-fetch', 'got', 'undici', 'request', 'superagent']) assert.ok(!pkg.dependencies[dependency]);
   const playwrightService = fs.readFileSync(path.join(ROOT, 'src/main/services/playwright-service.ts'), 'utf8');
